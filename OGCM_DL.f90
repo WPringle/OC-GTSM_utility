@@ -27,6 +27,7 @@
       integer  :: BC3D_DT = 3 ! Default delta t for the OGCM (hours)
       integer  :: dfl = 2     ! Compression level for NetCDF4
       integer  :: TMULT       ! BC3D_DT multiplier (to skip times)
+      integer  :: is          ! Start of the x-dimension when writing out array
       character(len=16) :: TS, TE ! Start and end times
       character(len=3) :: BCServer = 'ftp' ! Server type
       real*8,parameter :: BPGlim = 0.1d0 !upper/lower bound for BPGs
@@ -237,11 +238,13 @@
          BC3Ddir = -1
          write(6,*) 'Lon of ',trim(BC3D_Name),&
                     ' is defined from -180 to 180'
+         is = 1
       else
          ! Represents seam at 0/360
          BC3Ddir =  1
+         is = maxloc(BC3D_Lon,dim=1,mask=BC3D_Lon < 180d0) + 1
          write(6,*) 'Lon of ',trim(BC3D_Name),&
-                    ' is defined from 0 to 360'
+                    ' is defined from 0 to 360, is = ',is,BC3D_lon(is)
       endif
       
       end subroutine Get_LonLatDepthTime
@@ -535,11 +538,7 @@
                      BC3D_BCP(i,j,k) = BC3D_BCP(i,j,k-1)    &
                                      + DZ*(rhoavg - RhoWat0)
                   else
-                     !if (sz.eq.4) then
-                     !   BC2D_SigTS(i,j) = real(rho - RhoWat0)
-                     !else
-                        BC2D_SigTS(i,j) = rho - RhoWat0
-                     !endif
+                     BC2D_SigTS(i,j) = rho - RhoWat0
                      BC3D_BCP(i,j,k) = 0.0d0
                   endif
                   kb = k
@@ -692,11 +691,11 @@
          data_dims = [NXX_dim_id, NY_dim_id, timenc_dim_id]
          call def_var_att(ncid,'BPGX',nf90_type, data_dims, BPGX_id,   &
                         'east-west depth-averaged baroclinic pressure '&
-                        //'gradient','m^2s^-1')
+                        //'gradient','ms^-2')
          data_dims = [NX_dim_id, NYY_dim_id, timenc_dim_id]
          call def_var_att(ncid,'BPGY',nf90_type, data_dims, BPGY_id,   &
                       'north-south depth-averaged baroclinic pressure '&
-                        //'gradient','m^2s^-1')
+                        //'gradient','ms^-2')
          data_dims = [NX_dim_id, NY_dim_id, timenc_dim_id]
          call def_var_att(ncid,'NB',nf90_type, data_dims, NB_id, &
                          'buoyancy frequency at the seabed','s^-1')
@@ -724,13 +723,23 @@
          
          ! Put X, Y, Z on
          call check_err(nf90_open(BC2D_Name, nf90_write, ncid))
-         call check_err(nf90_put_var(ncid, lon_id, BC3D_Lon))
+         if (is == 1) then
+            ! Already -180/180 orientation
+            call check_err(nf90_put_var(ncid, lon_id, BC3D_Lon))
+            call check_err(nf90_put_var(ncid, lonc_id,     &
+                 0.5d0*(BC3D_Lon(1:NX-1) + BC3D_Lon(2:NX))))
+         else
+            ! Change to -180/180 orientation
+            call check_err(nf90_put_var(ncid, lon_id,      &
+                 [BC3D_Lon(is:NX), BC3D_Lon(1:is-1)-360d0]))
+            call check_err(nf90_put_var(ncid, lonc_id,              &
+                 [0.5d0*(BC3D_Lon(is:NX-1) + BC3D_Lon(is+1:NX)),    &
+                  0.5d0*(BC3D_Lon(1:is-1)  + BC3D_Lon(2:is))-360d0]))
+         endif
          call check_err(nf90_put_var(ncid, lat_id, BC3D_Lat))
-         call check_err(nf90_put_var(ncid, depth_id, BC3D_Z))
-         call check_err(nf90_put_var(ncid, lonc_id, &
-              0.5d0*(BC3D_Lon(1:NX-1) + BC3D_Lon(2:NX))))
          call check_err(nf90_put_var(ncid, latc_id, &
               0.5d0*(BC3D_Lat(1:NY-1) + BC3D_Lat(2:NY))))
+         call check_err(nf90_put_var(ncid, depth_id, BC3D_Z))
          call check_err(nf90_close(ncid))
       endif
       ! Barrier to ensure wait until netcdf is created by first
@@ -753,7 +762,7 @@
       end subroutine initNetCDF
 !-----------------------------------------------------------------------
 !-----------------------------------------------------------------------
-!     S U B R O U T I N E    I N I T _ N E T C D F
+!     S U B R O U T I N E    D E F _ V A R _ A T T
 !-----------------------------------------------------------------------
       subroutine def_var_att(ncid, Sname, NFtype, dims, var_id, Lname, &
                  Units, FillValue, Factor, Offset)
@@ -784,7 +793,7 @@
       implicit none
       integer, intent(in) :: IT
       integer,dimension(3) :: start, kount, kountX, kountY
-      integer :: dmy, mpistat(mpi_status_size)
+      integer  :: dmy, mpistat(mpi_status_size)
     
       ! Make netcdf/get dimension and variable IDs 
       if (IT.eq.0) then 
@@ -807,18 +816,12 @@
       call check_err(nf90_put_var(ncid, timenc_id,    &
                      CurDT%strftime("%Y-%m-%d %H:%M"),&
                      [1, start(3)],[16, kount(3)]))
-      call check_err(nf90_put_var(ncid, BPGX_id, &
-                     BC2D_BX, start, kountX))
-      call check_err(nf90_put_var(ncid, BPGY_id, &
-                     BC2D_BY, start, kountY))
-      call check_err(nf90_put_var(ncid, NB_id, &
-                     BC2D_NB, start, kount))
-      call check_err(nf90_put_var(ncid, NM_id, &
-                     BC2D_NM, start, kount))
-      call check_err(nf90_put_var(ncid, SigTS_id, &
-                     BC2D_SigTS, start, kount))
-      call check_err(nf90_put_var(ncid, MLD_id, &
-                     BC2D_MLD, start, kount))
+      call put_var(ncid, BPGX_id,BC2D_BX, start, kountX)
+      call put_var(ncid, BPGY_id, BC2D_BY, start, kountY)
+      call put_var(ncid, NB_id, BC2D_NB, start, kount)
+      call put_var(ncid, NM_id, BC2D_NM, start, kount)
+      call put_var(ncid, SigTS_id, BC2D_SigTS, start, kount)
+      call put_var(ncid, MLD_id, BC2D_MLD, start, kount)
       call check_err(nf90_close(ncid))
 
       if (mnProc > 1) then
@@ -827,6 +830,31 @@
       endif
  
       end subroutine UpdateNetCDF
+!-----------------------------------------------------------------------
+!     S U B R O U T I N E    P U T _ V A R
+!-----------------------------------------------------------------------
+      subroutine put_var(ncid, var_id, InArray, start, kount)
+      implicit none
+      integer,intent(in)  :: ncid, var_id, start(3), kount(3) 
+      real(sz),intent(in) :: InArray(:,:)
+      real(sz),allocatable :: Temp2D(:,:)
+
+      if (is > 1) then
+         ! If 0/360, re-orientate
+         allocate(Temp2D(kount(1),kount(2)))
+         Temp2D(1:kount(1)-is+1,:) = InArray(is:kount(1),:)
+         Temp2D(kount(1)-is:kount(1),:)  = InArray(1:is-1,:)
+         ! Write out into netcdf
+         call check_err(nf90_put_var(ncid, var_id, Temp2D,  &
+                        start, kount))
+      else
+         ! Write outinto netcdf
+         call check_err(nf90_put_var(ncid, var_id, InArray, &
+                        start, kount))
+      endif
+!
+      end subroutine put_var       
+!-----------------------------------------------------------------------
 !-----------------------------------------------------------------------
       END PROGRAM OGCM_DL
 !-----------------------------------------------------------------------
