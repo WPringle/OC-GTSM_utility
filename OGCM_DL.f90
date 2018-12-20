@@ -9,24 +9,28 @@
       use gsw_mod_toolbox, only: gsw_SA_from_SP, gsw_rho, gsw_CT_from_t&
           , gsw_Nsquared, gsw_mlp
       implicit none
-!     WJP:
-!     This program downloads OGCM data (e.g. HYCOM), and computes the 
-!     baroclinic pressure gradient term, buoyancy frequenices, sea
+!     This program downloads OGCM data (e.g. GOFS 3.1 HYCOM), and computes the 
+!     baroclinic pressure gradient term, buoyancy frequencies, sea
 !     surface denity, sea surface temperature, and mixed-layer depth
 !     on the structured grid, outputting it to a compressed NetCDF file
+
+!     Use below two lines for output in single precision (saves space)
+      integer  :: nf90_type = nf90_float  ! Type to store matrix arrays in NetCDF
+      integer,parameter  :: sz = 4 !
+!     Use below two lines for output in double precision
+!      integer  :: nf90_type = nf90_double ! Type to store matrix arrays in NetCDF
+!     integer,parameter  :: sz = 8 !
+
       character(len=80) :: BC3D_Name ! Name of the BC3D NETCDF file 
       integer  :: BC3Ddir     ! orientaton of longitude 
       integer  :: NZ, NX, NY  ! dimensions of 3D BC model required
       integer  :: BC3D_DT = 3 ! Default delta t for the OGCM (hours)
       integer  :: dfl = 2     ! Compression level for NetCDF4
-      integer  :: nf90_type = nf90_float  ! Type to store matrix arrays in NetCDF
-      integer,parameter  :: sz = 4 !
-!      integer  :: nf90_type = nf90_double ! Type to store matrix arrays in NetCDF
       integer  :: TMULT       ! BC3D_DT multiplier (to skip times)
       character(len=16) :: TS, TE ! Start and end times
       character(len=3) :: BCServer = 'ftp' ! Server type
-      logical  :: BC3Dautodl = .false.
       real*8,parameter :: BPGlim = 0.1d0 !upper/lower bound for BPGs
+      real*8,parameter :: LatUL = 89.9d0 !upper limit for Lat 
       real*8,allocatable,dimension(:) :: BC3D_Lon, BC3D_Lat, BC3D_Z
       real(sz),allocatable,dimension(:,:,:) :: BC3D_SP, BC3D_T, BC3D_BCP
       real(sz),allocatable,dimension(:,:) :: BC2D_NM, BC2D_NB, BC2D_BX,&
@@ -56,13 +60,13 @@
 !      endif
 !      write(6,*) 'myProc = ',myProc
 !..... 
+!     Get next and previous processors to inform when netCDF
+!     file is free to write out into
       nextProc = myProc + 1
       if (nextProc.gt.mnProc-1) nextProc = 0    
       prevProc = myProc - 1
       if (prevProc.lt.0) prevProc = mnProc - 1    
  
-      write(6,*) 'myProc = ',myProc, nextProc, prevProc
-
 !.......Read the Control File
       call Read_Input_File() 
 
@@ -121,7 +125,7 @@
       
       implicit none
       type(timedelta) :: EndCheck
-      character(len=3)   :: hhh 
+      character(len=3):: hhh 
       integer :: IT
 
       ! Set the output filename
@@ -151,7 +155,7 @@
 !     S U B R O U T I N E  R E A D _ B C 3 D _ N E T C D F
 !-----------------------------------------------------------------------
 !-----------------------------------------------------------------------
-      SUBROUTINE Read_BC3D_NetCDF()
+      subroutine Read_BC3D_NetCDF()
       implicit none
       logical :: errL
       integer :: NC_ID
@@ -173,28 +177,28 @@
       call Check_err(NF90_CLOSE(NC_ID))
 !
 !-----------------------------------------------------------------------
-      END SUBROUTINE Read_BC3D_NetCDF
+      end subroutine Read_BC3D_NetCDF
 !-----------------------------------------------------------------------
 !-----------------------------------------------------------------------
-      SUBROUTINE Get_LonLatDepthTime(NC_ID)
+      subroutine Get_LonLatDepthTime(NC_ID)
       implicit none
       integer,intent(in)  :: NC_ID
       integer  :: Temp_ID, i, j 
-      real*8   :: BC3D_Lon_s, LatVal, LatUL = 89d0
+      real*8   :: BC3D_Lon_s, LatVal 
         
       if (allocated(BC3D_Lon)) then
          ! Test the latitude, longitude and z variables 
-         CALL Check_err(NF90_INQ_VARID(NC_ID,'lon',Temp_ID))
-         CALL Check_err(NF90_GET_VAR(NC_ID,Temp_ID,&
+         call Check_err(NF90_INQ_VARID(NC_ID,'lon',Temp_ID))
+         call Check_err(NF90_GET_VAR(NC_ID,Temp_ID,&
                         BC3D_Lon_s,start=[1]))
       else
          ! First call
-         CALL Check_err(NF90_INQ_DIMID(NC_ID,'lat',Temp_ID))
-         CALL Check_err(NF90_INQUIRE_DIMENSION(NC_ID,Temp_ID,len=NY))
-         CALL Check_err(NF90_INQ_DIMID(NC_ID,'lon',Temp_ID))
-         CALL Check_err(NF90_INQUIRE_DIMENSION(NC_ID,Temp_ID,len=NX))
-         CALL Check_err(NF90_INQ_DIMID(NC_ID,'depth',Temp_ID))
-         CALL Check_err(NF90_INQUIRE_DIMENSION(NC_ID,Temp_ID,len=NZ))
+         call Check_err(NF90_INQ_DIMID(NC_ID,'lat',Temp_ID))
+         call Check_err(NF90_INQUIRE_DIMENSION(NC_ID,Temp_ID,len=NY))
+         call Check_err(NF90_INQ_DIMID(NC_ID,'lon',Temp_ID))
+         call Check_err(NF90_INQUIRE_DIMENSION(NC_ID,Temp_ID,len=NX))
+         call Check_err(NF90_INQ_DIMID(NC_ID,'depth',Temp_ID))
+         call Check_err(NF90_INQUIRE_DIMENSION(NC_ID,Temp_ID,len=NZ))
          
          ! Allocate the lat lon and z arrays first 
          allocate(BC3D_Lat(NY),BC3D_Lon(NX),BC3D_Z(NZ))
@@ -205,12 +209,12 @@
          allocate(DX(NX-1,NY),DY(NX,NY-1))
 
          ! Read the latitude, longitude and z variables 
-         CALL Check_err(NF90_INQ_VARID(NC_ID,'lat',Temp_ID))
-         CALL Check_err(NF90_GET_VAR(NC_ID,Temp_ID,BC3D_Lat))
-         CALL Check_err(NF90_INQ_VARID(NC_ID,'lon',Temp_ID))
-         CALL Check_err(NF90_GET_VAR(NC_ID,Temp_ID,BC3D_Lon))
-         CALL Check_err(NF90_INQ_VARID(NC_ID,'depth',Temp_ID))
-         CALL Check_err(NF90_GET_VAR(NC_ID,Temp_ID,BC3D_Z, &
+         call Check_err(NF90_INQ_VARID(NC_ID,'lat',Temp_ID))
+         call Check_err(NF90_GET_VAR(NC_ID,Temp_ID,BC3D_Lat))
+         call Check_err(NF90_INQ_VARID(NC_ID,'lon',Temp_ID))
+         call Check_err(NF90_GET_VAR(NC_ID,Temp_ID,BC3D_Lon))
+         call Check_err(NF90_INQ_VARID(NC_ID,'depth',Temp_ID))
+         call Check_err(NF90_GET_VAR(NC_ID,Temp_ID,BC3D_Z, &
                         start=[1],count=[NZ]))
          BC3D_Lon_s = BC3D_Lon(1)
          ! Pre-computing the distances on the sphere
@@ -240,15 +244,15 @@
                     ' is defined from 0 to 360'
       endif
       
-      END SUBROUTINE Get_LonLatDepthTime
+      end subroutine Get_LonLatDepthTime
 !-----------------------------------------------------------------------
 !-----------------------------------------------------------------------
-      FUNCTION read_nc_var(NC_ID,varname,BCIT_IN) result (Var)
+      function read_nc_var(NC_ID,varname,BCIT_IN) result (Var)
       implicit none
 
-      INTEGER,INTENT(IN) :: NC_ID, BCIT_IN
-      CHARACTER(10),INTENT(IN) :: varname
-      INTEGER :: Temp_ID, i, j, k 
+      integer,intent(in) :: NC_ID, BCIT_IN
+      character(10),intent(in) :: varname
+      integer :: Temp_ID, i, j, k 
       real(sz) :: FV, SF, OS
       real(sz),allocatable :: Var(:,:,:)
 
@@ -269,7 +273,7 @@
       enddo
 !
 !-----------------------------------------------------------------------
-      END FUNCTION read_nc_var
+      end function read_nc_var
 !-----------------------------------------------------------------------
 !-----------------------------------------------------------------------
 !     S U B R O U T I N E   C H E C K  _  E R R
@@ -292,26 +296,22 @@
       end subroutine check_err
 !-----------------------------------------------------------------------
 !----------------------------------------------------------------------
-      SUBROUTINE BC3DDOWNLOAD(TimeIn)
+      subroutine BC3DDOWNLOAD(TimeIn)
       use ifport, only: systemqq, sleep
       
       implicit none
      
       type(datetime),intent(in) :: TimeIn
-      character(len=200) :: fileserver, vars, subset, times, & 
-                            filemid, fileend, expt, options
+      type(datetime)     :: TimeOff
+      character(len=200) :: fileserver, vars, times, filemid, & 
+                            fileend, expt, options
       character(len=280) :: FullPath, line
       character(len=3)   :: hhh 
       character(len=4)   :: yyyy 
-      character(len=1)   :: stride
-      character(len=8)   :: yyyymmdd 
-      character(len=9)   :: north, south, east, west 
       character(len=5)   :: command 
-      type(datetime)     :: TimeOff
       logical(4)         :: resOK
       integer            :: iter, stat, fid
       integer*8          :: Fsize, FSizeTrue 
-      real*8           :: Lat_s, Lat_e, Lon_e, Lon_s
          
       ! Add on the time based on processor number 
       TimeOff  = TimeIn - timedelta(hours=12)
@@ -326,7 +326,6 @@
                     //'datasets/GLBv0.08/'
          command    = 'curl ' !'wget '
          options    = ' -s --connect-timeout 30'
-         !' -nv -a '//trim(localdir)//'/fort.16 -o ' !' -s -o ' !--connect-timeout 30 -o '
       elseif (BCServer == 'ncs') then
          ! NCSS
          fileserver = '"http://ncss.hycom.org/thredds/ncss/GLBv0.08/'
@@ -410,7 +409,6 @@
       write(hhh,'(I3)') myProc
       if (BCServer == 'ftp') then
          vars    = ''
-         subset  = '' 
          times   = TimeOff%strftime("%Y%m%d")//'12_t0'&
                  //TimeOff%strftime("%H")
          if (expt(6:6) == '9') then
@@ -420,29 +418,24 @@
          endif
       elseif (BCServer == 'ncs') then
          vars    = '?var=salinity&var=water_temp'
-         subset  = '' !'north='//trim(adjustl(north))//'&west='
-!     &        //trim(adjustl(west))//'&east='//trim(adjustl(east))
-!     &        //'&south='//trim(adjustl(south))
-         filemid = '' !'&disableProjSubset=on&horizStride='//stride
          times   = '&time='//TimeIn%strftime("%Y-%m-%dT%H")&
                  //'%3A00%3A00Z'
+         filemid = ''
          fileend = '&vertStride=1&addLatLon=true&accept=netcdf4"'
       elseif (BCServer == 'opd') then
          vars    = '" -v salinity,water_temp'
-         subset  = '' !'north='//trim(adjustl(north))//'&west='
-!     &        //trim(adjustl(west))//'&east='//trim(adjustl(east))
-!     &        //'&south='//trim(adjustl(south))
-         filemid = '' !'&disableProjSubset=on&horizStride='//stride
          times   = ' -d time,'//trim(hhh)
          fileend = ''
+         filemid = ''
       endif
       ! Get the final path
-      Fullpath = trim(fileserver)//trim(expt)//trim(vars)//trim(subset)&
+      Fullpath = trim(fileserver)//trim(expt)//trim(vars)       &
                //trim(filemid)//trim(times)//trim(fileend) 
       ! Getting GOFS data
-      write(6,*) 'Trying to download GOFS 3.1 data: '           &
-                //command//trim(Fullpath)//trim(options)//' -o '&
-                //trim(BC3D_Name)
+      !write(6,*) 'Trying to download GOFS 3.1 data: '           &
+      !          //command//trim(Fullpath)//trim(options)//' -o '&
+      !          //trim(BC3D_Name)
+      write(6,*) 'Downloading: ',trim(FullPath)
       ! Let's get expected filesize
       if (BCServer == 'ftp') then
          FSizeTrue = 0
@@ -464,11 +457,10 @@
             if (FSizeTrue.eq.0) then
                ! Non-existant file. Try 3 hours behind
                TimeOff = TimeOff - timedelta(hours=3)
-               times   = TimeOff%strftime("%Y%m%d")//'12_t0'&
+               times   = TimeOff%strftime("%Y%m%d")//'12_t0'       &
                        //TimeOff%strftime("%H")
-               Fullpath = trim(fileserver)//trim(expt)//trim(vars)&
-                       //trim(subset)//trim(filemid)//trim(times) &
-                       //trim(fileend)
+               Fullpath = trim(fileserver)//trim(expt)//trim(vars) &
+                       //trim(filemid)//trim(times)//trim(fileend)
             endif 
          enddo
       else
@@ -499,12 +491,12 @@
          call MPI_Finalize(ierr); stop
       endif
 !----------------------------------------------------------------------
-      END SUBROUTINE BC3DDOWNLOAD
+      end subroutine BC3DDOWNLOAD
 !-----------------------------------------------------------------------
 !     S U B R O U T I N E  C A L C _ B C 2 D _ T E R M S
 !-----------------------------------------------------------------------
 !-----------------------------------------------------------------------
-      SUBROUTINE Calc_BC2D_Terms()
+      subroutine Calc_BC2D_Terms()
       implicit none
       
       real*8 :: rho, rhoavg, bx_avg, by_avg, bx_z, by_z
@@ -641,7 +633,7 @@
          enddo
       enddo
 !-----------------------------------------------------------------------
-      END SUBROUTINE Calc_BC2D_Terms
+      end subroutine Calc_BC2D_Terms
 !-----------------------------------------------------------------------
       function haversine(deglon1,deglon2,deglat1,deglat2) result (dist)
           ! great circle distance -- adapted from Matlab 
