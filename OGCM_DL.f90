@@ -49,8 +49,8 @@
       character(len=20) :: BC2D_Name ! Name of Output File
       integer :: ncid, ncformat, timenc_id, timenc_dim_id, NX_dim_id,  &
               NY_dim_id, NZ_dim_id, lon_id, lat_id, depth_id, BPGX_id, &
-              BPGY_id, NB_id, NM_id, SigTS_id, MLD_id, NXX_dim_id,     &
-              NYY_dim_id, lonc_id, latc_id, strlen_dim_id
+              BPGY_id, NB_id, NM_id, SigTS_id, MLD_id, NYY_dim_id,     &
+              lonc_id, latc_id, strlen_dim_id
 !-----------------------------------------------------------------------
 
 !.......Initialize MPI

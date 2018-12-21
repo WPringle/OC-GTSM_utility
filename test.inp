@@ -1,5 +1,5 @@
-2017-05-01 12:00
-2018-11-30 12:00
-8
-ftp
-Output.nc
+2017-05-01 12:00    ! Start datetime (YYYY-MM-DD HH:mm)
+2018-11-30 12:00    ! End datetime (YYYY-MM-DD HH:mm)
+8                   ! DT multiplier: DT is 3 hrs for GOFS 3.1 so 8 indicates 24 hr output
+ftp                 ! The server to download from (ftp -or- ncs -or- opd)
+Output.nc           ! Output netcdf filename (20 characters)
