@@ -21,17 +21,18 @@
 !      integer  :: nf90_type = nf90_double ! Type to store matrix arrays in NetCDF
 !     integer,parameter  :: sz = 8 !
 
-      character(len=80) :: BC3D_Name ! Name of the BC3D NETCDF file 
+      character(len=80) :: BC3D_Name ! Name of the BC3D netCDF file 
       integer  :: BC3Ddir     ! orientaton of longitude 
       integer  :: NZ, NX, NY  ! dimensions of 3D BC model required
       integer  :: BC3D_DT = 3 ! Default delta t for the OGCM (hours)
       integer  :: dfl = 2     ! Compression level for NetCDF4
       integer  :: TMULT       ! BC3D_DT multiplier (to skip times)
       integer  :: is          ! Start of the x-dimension when writing out array
+      integer  :: tsind = 1   ! Start time index in netCDF file
       character(len=16) :: TS, TE ! Start and end times
       character(len=3) :: BCServer = 'ftp' ! Server type
       real*8,parameter :: BPGlim = 0.1d0 !upper/lower bound for BPGs
-      real*8,parameter :: LatUL = 89.9d0 !upper limit for Lat 
+      real*8,parameter :: LatUL = 89d0 !upper limit for Lat in haversine 
       real*8,allocatable,dimension(:) :: BC3D_Lon, BC3D_Lat, BC3D_Z
       real(sz),allocatable,dimension(:,:,:) :: BC3D_SP, BC3D_T, BC3D_BCP
       real(sz),allocatable,dimension(:,:) :: BC2D_NM, BC2D_NB, BC2D_BX,&
@@ -183,15 +184,14 @@
 !-----------------------------------------------------------------------
       subroutine Get_LonLatDepthTime(NC_ID)
       implicit none
-      integer,intent(in)  :: NC_ID
-      integer  :: Temp_ID, i, j 
+      integer,intent(in) :: NC_ID
+      integer  :: Temp_ID, i, j, ii 
       real*8   :: BC3D_Lon_s, LatVal 
         
       if (allocated(BC3D_Lon)) then
          ! Test the latitude, longitude and z variables 
          call Check_err(NF90_INQ_VARID(NC_ID,'lon',Temp_ID))
-         call Check_err(NF90_GET_VAR(NC_ID,Temp_ID,&
-                        BC3D_Lon_s,start=[1]))
+         call Check_err(NF90_GET_VAR(NC_ID,Temp_ID,BC3D_Lon))
       else
          ! First call
          call Check_err(NF90_INQ_DIMID(NC_ID,'lat',Temp_ID))
@@ -206,8 +206,8 @@
          allocate(BC3D_SP(NX,NY,NZ),BC3D_T(NX,NY,NZ),BC3D_BCP(NX,NY,NZ))
          allocate(BC2D_NB(NX,NY),BC2D_NM(NX,NY),   &
                   BC2D_SigTS(NX,NY),BC2D_MLD(NX,NY))
-         allocate(BC2D_BX(NX-1,NY),BC2D_BY(NX,NY-1))
-         allocate(DX(NX-1,NY),DY(NX,NY-1))
+         allocate(BC2D_BX(NX,NY),BC2D_BY(NX,NY-1))
+         allocate(DX(NX,NY),DY(NX,NY-1))
 
          ! Read the latitude, longitude and z variables 
          call Check_err(NF90_INQ_VARID(NC_ID,'lat',Temp_ID))
@@ -217,15 +217,14 @@
          call Check_err(NF90_INQ_VARID(NC_ID,'depth',Temp_ID))
          call Check_err(NF90_GET_VAR(NC_ID,Temp_ID,BC3D_Z, &
                         start=[1],count=[NZ]))
-         BC3D_Lon_s = BC3D_Lon(1)
          ! Pre-computing the distances on the sphere
          do j = 1,NY 
             do i = 1,NX
-               if (i < NX) then
-                  LatVal  = min(LatUL,BC3D_Lat(j))
-                  DX(i,j) = haversine(BC3D_Lon(i),BC3D_Lon(i+1),&
-                                      LatVal,LatVal) 
-               endif
+               LatVal  = min(LatUL,BC3D_Lat(j))
+               ii = i + 1
+               if (i.eq.NX) ii = 1
+               DX(i,j) = haversine(BC3D_Lon(i),BC3D_Lon(ii),   &
+                                   LatVal,LatVal) 
                if (j < NY) then
                   DY(i,j) = haversine(BC3D_Lon(i),BC3D_Lon(i), &
                                       BC3D_Lat(j),BC3D_Lat(j+1)) 
@@ -233,6 +232,7 @@
             enddo
          enddo
       endif
+      BC3D_Lon_s = BC3D_Lon(1)
       if (BC3D_Lon_s < 0d0) then
          ! Represents seam at 180/-180
          BC3Ddir = -1
@@ -244,7 +244,7 @@
          BC3Ddir =  1
          is = maxloc(BC3D_Lon,dim=1,mask=BC3D_Lon < 180d0) + 1
          write(6,*) 'Lon of ',trim(BC3D_Name),&
-                    ' is defined from 0 to 360, is = ',is,BC3D_lon(is)
+                    ' is defined from 0 to 360, is = ',is
       endif
       
       end subroutine Get_LonLatDepthTime
@@ -444,9 +444,10 @@
          FSizeTrue = 0
          do while(FSizeTrue.eq.0) 
             ! Get filesize at remote location 
-            resOK = systemqq(command//trim(Fullpath)//trim(options)    &
-                           //' -I -L -o filesize'//trim(adjustl(hhh)))
-            open(newunit=fid,file='filesize'//trim(adjustl(hhh)),      &
+            resOK = systemqq(command//trim(Fullpath)//trim(options)//  &
+                       ' -I -L -o filesize'//trim(adjustl(hhh))//'.txt')
+            open(newunit=fid,                                     &
+                 file='filesize'//trim(adjustl(hhh))//'.txt',     &
                  status='old',action='read')
                do ! read until eof
                   read(fid,'(A280)',iostat=stat) line
@@ -463,7 +464,7 @@
                times   = TimeOff%strftime("%Y%m%d")//'12_t0'       &
                        //TimeOff%strftime("%H")
                Fullpath = trim(fileserver)//trim(expt)//trim(vars) &
-                       //trim(filemid)//trim(times)//trim(fileend)
+                        //trim(filemid)//trim(times)//trim(fileend)
             endif 
          enddo
       else
@@ -505,7 +506,7 @@
       real*8 :: rho, rhoavg, bx_avg, by_avg, bx_z, by_z
       real*8 :: uavg, vavg, DU, DV, DZ, DUUX, DVVY, DUVX, DUVY, xx, yy
       real*8 :: SA(NZ), CT(NZ), Lat(NZ), N2(NZ-1), zmid(NZ-1)
-      integer  :: i, j, k, kb, kbx, kby, kbuu, kbuv, kbvv
+      integer  :: i, j, k, ii, kb, kbx, kby, kbuu, kbuv, kbvv
       real(sz) :: FV = -3d4, FVP = -3d4 + 1d-3 
 
       ! Loop over all cells to get the baroclinic pressure and the
@@ -587,17 +588,17 @@
                   by_avg = by_z 
                   ! If we hit bottom
                   if (BC3D_BCP(i,j,k) < FVP) exit
-                  if (i < NX) then
-                     if (BC3D_BCP(i+1,j,k) > FVP) then
-                        ! x-gradient at this level
-                        bx_z = ( BC3D_BCP(i+1,j,k) -       &
-                                 BC3D_BCP(i,j,k) ) / DX(i,j)
-                        ! trapezoidal rule
-                        bx_avg = 0.5d0*(bx_avg + bx_z)
-                        BC2D_BX(i,j) = BC2D_BX(i,j) +      &
-                                      (BC3D_Z(k)-BC3D_Z(k-1))*bx_avg
-                        kbx = k
-                     endif
+                  ii = i + 1
+                  if (i == NX) ii = 1
+                  if (BC3D_BCP(ii,j,k) > FVP) then
+                     ! x-gradient at this level
+                     bx_z = ( BC3D_BCP(ii,j,k) - BC3D_BCP(i,j,k) ) &
+                          / DX(i,j)
+                     ! trapezoidal rule
+                     bx_avg = 0.5d0*(bx_avg + bx_z)
+                     BC2D_BX(i,j) = BC2D_BX(i,j) +      &
+                                   (BC3D_Z(k)-BC3D_Z(k-1))*bx_avg
+                     kbx = k
                   endif
                   if (j < NY) then
                      if (BC3D_BCP(i,j+1,k) > FVP) then
@@ -615,7 +616,7 @@
                   ! Is always zero at top
                   bx_z = 0.0d0
                   by_z = 0.0d0
-                  if (i < NX) BC2D_BX(i,j) = 0.0d0
+                  BC2D_BX(i,j) = 0.0d0
                   if (j < NY) BC2D_BY(i,j) = 0.0d0
                endif
             enddo
@@ -655,7 +656,10 @@
       subroutine initNetCDF()
       implicit none
       logical :: Fexist 
-      integer :: ierr, data_dims(3) 
+      integer :: ierr, data_dims(3), TEE 
+      type(timedelta) :: DT
+      type(datetime)  :: TNDT
+      character(len=16) :: TSS
 
       if (myProc.eq.0) then   
          inquire(file=BC2D_Name,exist=Fexist)
@@ -672,7 +676,6 @@
          call check_err(nf90_def_dim(ncid,'NX',NX,NX_dim_id))
          call check_err(nf90_def_dim(ncid,'NY',NY,NY_dim_id))
          call check_err(nf90_def_dim(ncid,'NZ',NZ,NZ_dim_id))
-         call check_err(nf90_def_dim(ncid,'NXX',NX-1,NXX_dim_id))
          call check_err(nf90_def_dim(ncid,'NYY',NY-1,NYY_dim_id))
          ! Define vars 
          data_dims = [strlen_dim_id, timenc_dim_id, 1]
@@ -684,11 +687,11 @@
                           lat_id,'latitude','degrees')
          call def_var_att(ncid,'depth',nf90_double, [NZ_dim_id],  &
                           depth_id,'depth below sea level','m')
-         call def_var_att(ncid,'lonc',nf90_double, [NXX_dim_id], &
+         call def_var_att(ncid,'lonc',nf90_double, [NX_dim_id], &
                           lonc_id,'longitude for BPGX','degrees')
          call def_var_att(ncid,'latc',nf90_double, [NYY_dim_id], &
                           latc_id,'latitude for BPGY','degrees')
-         data_dims = [NXX_dim_id, NY_dim_id, timenc_dim_id]
+         data_dims = [NX_dim_id, NY_dim_id, timenc_dim_id]
          call def_var_att(ncid,'BPGX',nf90_type, data_dims, BPGX_id,   &
                         'east-west depth-averaged baroclinic pressure '&
                         //'gradient','ms^-2')
@@ -726,15 +729,17 @@
          if (is == 1) then
             ! Already -180/180 orientation
             call check_err(nf90_put_var(ncid, lon_id, BC3D_Lon))
-            call check_err(nf90_put_var(ncid, lonc_id,     &
-                 0.5d0*(BC3D_Lon(1:NX-1) + BC3D_Lon(2:NX))))
+            call check_err(nf90_put_var(ncid, lonc_id,      &
+                 [0.5d0*(BC3D_Lon(1:NX-1) + BC3D_Lon(2:NX)),&
+                  0.5d0*(BC3D_Lon(NX) + BC3D_Lon(1)+360d0)]))
          else
             ! Change to -180/180 orientation
             call check_err(nf90_put_var(ncid, lon_id,      &
-                 [BC3D_Lon(is:NX), BC3D_Lon(1:is-1)-360d0]))
-            call check_err(nf90_put_var(ncid, lonc_id,              &
-                 [0.5d0*(BC3D_Lon(is:NX-1) + BC3D_Lon(is+1:NX)),    &
-                  0.5d0*(BC3D_Lon(1:is-1)  + BC3D_Lon(2:is))-360d0]))
+                 [BC3D_Lon(is:NX)-360d0, BC3D_Lon(1:is-1)]))
+            call check_err(nf90_put_var(ncid, lonc_id,                &
+                 [0.5d0*(BC3D_Lon(is:NX-1) + BC3D_Lon(is+1:NX))-360d0,&
+                  0.5d0*(BC3D_Lon(NX)-360d0 + BC3D_Lon(1)),           &
+                  0.5d0*(BC3D_Lon(1:is-1)  + BC3D_Lon(2:is))]))
          endif
          call check_err(nf90_put_var(ncid, lat_id, BC3D_Lat))
          call check_err(nf90_put_var(ncid, latc_id, &
@@ -748,8 +753,20 @@
       
       if (Fexist) then 
          ! Get the dim and var ids
-         call check_err(nf90_open(BC2D_Name, nf90_write, ncid))
+         call check_err(nf90_open(BC2D_Name, nf90_nowrite, ncid))
+         call check_err(nf90_inq_dimid(ncid,'time', timenc_dim_id))
+         call Check_err(nf90_inquire_dimension(ncid,&
+                        timenc_dim_id,len=TEE))
          call check_err(nf90_inq_varid(ncid,'time', timenc_id))
+         ! Let's get the start time index
+         do tsind = 1,TEE
+            call check_err(nf90_get_var(ncid, timenc_id, &
+                           TSS,start=[1, tsind],count=[16, 1]))
+            TNDT = strptime(trim(TSS),"%Y-%m-%d %H:%M")
+            DT   = TSDT - TNDT
+            if (DT%total_seconds() <= 0) exit
+         enddo
+         if (myProc.eq.0) write(6,*) 'tsind = ',tsind
          call check_err(nf90_inq_varid(ncid,'BPGX', BPGX_id))
          call check_err(nf90_inq_varid(ncid,'BPGY', BPGY_id))
          call check_err(nf90_inq_varid(ncid,'NB', NB_id))    
@@ -800,9 +817,8 @@
          call initNetCDF()
       endif
 
-      start = [1, 1, mnProc*IT + myProc + 1];
+      start = [1, 1, mnProc*IT + myProc + tsind];
       kount = [NX, NY, 1];
-      kountX = [NX-1, NY, 1];
       kountY = [NX, NY-1, 1];
  
       if ( (IT > 0 .or. myProc > 0) .and. mnProc > 1) then
@@ -816,7 +832,7 @@
       call check_err(nf90_put_var(ncid, timenc_id,    &
                      CurDT%strftime("%Y-%m-%d %H:%M"),&
                      [1, start(3)],[16, kount(3)]))
-      call put_var(ncid, BPGX_id,BC2D_BX, start, kountX)
+      call put_var(ncid, BPGX_id,BC2D_BX, start, kount)
       call put_var(ncid, BPGY_id, BC2D_BY, start, kountY)
       call put_var(ncid, NB_id, BC2D_NB, start, kount)
       call put_var(ncid, NM_id, BC2D_NM, start, kount)
