@@ -13,6 +13,11 @@
 !     baroclinic pressure gradient term, buoyancy frequencies, sea
 !     surface denity, sea surface temperature, and mixed-layer depth
 !     on the structured grid, outputting it to a compressed NetCDF file
+!
+!      -or- 
+!
+!     Computes the depth-integrated momentum dispersion term and the
+!     depth-integrated momentum diffusion term for OGCM 3D velocities
 
 !     Use below two lines for output in single precision (saves space)
       integer  :: nf90_type = nf90_float  ! Type to store matrix arrays in NetCDF
@@ -29,6 +34,7 @@
       integer  :: TMULT       ! BC3D_DT multiplier (to skip times)
       integer  :: is          ! Start of the x-dimension when writing out array
       integer  :: tsind = 1   ! Start time index in netCDF file
+      integer  :: OutType = 1 ! Output type; = 1 baroclinicity, = 2 velocity
       character(len=16) :: TS, TE ! Start and end times
       character(len=3) :: BCServer = 'ftp' ! Server type
       real*8,parameter :: BPGlim = 0.1d0 !upper/lower bound for BPGs
@@ -36,21 +42,22 @@
       real*8,allocatable,dimension(:) :: BC3D_Lon, BC3D_Lat, BC3D_Z
       real(sz),allocatable,dimension(:,:,:) :: BC3D_SP, BC3D_T, BC3D_BCP
       real(sz),allocatable,dimension(:,:) :: BC2D_NM, BC2D_NB, BC2D_BX,&
-                                           BC2D_SigTS, BC2D_BY, BC2D_MLD
-      real*8,allocatable,dimension(:,:)  :: DX, DY
+                                  BC2D_SigTS, BC2D_BY, BC2D_MLD, BC2D_CD
+      real*8,allocatable,dimension(:,:) :: DX, DY, DUU, DVV, DUV, DU,  &
+                                           DV, B
 !     Variables for temporal integration
       type(datetime) :: TSDT, TEDT, CurDT
       integer :: ierr, myProc, mnProc, nextProc, prevProc
       real*8,parameter :: RhoWat0 = 1d3, PI = 3.141592653589793D0,     &
                        deg2rad = PI/180d0, Rearth = 6378206.4d0,       &
                        G = 9.80665d0
-      real(sz),parameter :: SigT0 = 0d0, DFV = 1d4 
+      real(sz),parameter :: SigT0 = 0d0, DFV = 1d0 !DFV = 1d4 
       ! Netcdf output info
-      character(len=20) :: BC2D_Name ! Name of Output File
+      character(len=40) :: BC2D_Name ! Name of Output File
       integer :: ncid, ncformat, timenc_id, timenc_dim_id, NX_dim_id,  &
-              NY_dim_id, NZ_dim_id, lon_id, lat_id, depth_id, BPGX_id, &
-              BPGY_id, NB_id, NM_id, SigTS_id, MLD_id, NYY_dim_id,     &
-              lonc_id, latc_id, strlen_dim_id
+              CD_id, NYYY_dim_id, NY_dim_id, NYY_dim_id, MLD_id, NM_id,&
+              SigTS_id, BPGX_id, BPGY_id, NB_id, lon_id, lat_id, &
+              latc_id, lats_id, lonc_id, strlen_dim_id
 !-----------------------------------------------------------------------
 
 !.......Initialize MPI
@@ -101,11 +108,20 @@
          if (.not.TSDT%isvalid().or..not.TEDT%isvalid()) then
             write(6,*) 'ERROR: Invalid datetime TS or TE: '   &
                      //'Must be formatted as yyyy-MM-dd HH:mm'
-            call MPI_Finalize(ierr); stop
+            call MPI_Abort(MPI_Comm_World,0,ierr)
          endif
          read(5,*) TMULT; print *,'TMULT = ', TMULT          
          read(5,*) BCServer; print *, 'BCServer = ', BCServer
-         read(5,'(A20)') BC2D_Name; print *, 'BC2D_Name = ', BC2D_Name
+         read(5,*) OutType
+         if (OutType == 1) then
+            write(6,*) 'INFO: Compute & output T and S only '
+         elseif (OutType == 2) then
+            write(6,*) 'INFO: Compute & output T, S, U, V '
+         else
+            write(6,*) 'ERROR: Invalid OutType = ',OutType
+            call MPI_Finalize(ierr); stop
+         endif
+         read(5,'(A40)') BC2D_Name; print *, 'BC2D_Name = ', BC2D_Name
          ncformat = nf90_hdf5
       endif
       ! Broadcast information to all processors
@@ -115,7 +131,8 @@
       TEDT = strptime(TE,"%Y-%m-%d %H:%M")
       call MPI_Bcast(TMULT,1,MPI_Integer,0,MPI_Comm_World,ierr)
       call MPI_Bcast(BCServer,3,MPI_Character,0,MPI_Comm_World,ierr)
-      call MPI_Bcast(BC2D_Name,20,MPI_Character,0,MPI_Comm_World,ierr)
+      call MPI_Bcast(OutType,1,MPI_Integer,0,MPI_Comm_World,ierr)
+      call MPI_Bcast(BC2D_Name,40,MPI_Character,0,MPI_Comm_World,ierr)
 !
       end subroutine Read_Input_File
 !
@@ -128,7 +145,7 @@
       implicit none
       type(timedelta) :: EndCheck
       character(len=3):: hhh 
-      integer :: IT
+      integer :: IT, ii
 
       ! Set the output filename
       write(hhh,'(I3)') myProc
@@ -137,12 +154,14 @@
       write(6,*) 'MyProc = ',myProc,'CurDT = ',CurDT%isoformat(' ')
       EndCheck = TEDT - CurDT; IT = 0
       do while (EndCheck%total_seconds() >= 0)
-         ! Download new OGCM NetCDF file
-         call BC3DDOWNLOAD(CurDT)
-         ! Read the OGCM NetCDF file
-         call Read_BC3D_NetCDF()
-         ! Calculate the new BC2D terms.
-         call Calc_BC2D_Terms()
+         do ii = 1,OutType
+            ! Download new OGCM NetCDF file
+            call BC3DDOWNLOAD(CurDT,ii)
+            ! Read the OGCM NetCDF file
+            call Read_BC3D_NetCDF(ii)
+            ! Calculate the new BC2D terms.
+            call Calc_BC2D_Terms(ii)
+         end do
          ! Put new BC2D terms in netCDF output file
          call UpdateNetCDF(IT)
          ! Update the time 
@@ -157,8 +176,9 @@
 !     S U B R O U T I N E  R E A D _ B C 3 D _ N E T C D F
 !-----------------------------------------------------------------------
 !-----------------------------------------------------------------------
-      subroutine Read_BC3D_NetCDF()
+      subroutine Read_BC3D_NetCDF(flag)
       implicit none
+      integer,intent(in) :: flag
       logical :: errL
       integer :: NC_ID
       
@@ -169,11 +189,19 @@
       ! or check the newly downloaded data
       call Get_LonLatDepthTime(NC_ID)
      
-      ! Read all the necessary temporal varying data 
-      ! Practical Salinity
-      BC3D_SP = read_nc_var(NC_ID,'salinity  ',1)
-      ! Temperature 
-      BC3D_T  = read_nc_var(NC_ID,'water_temp',1)
+      ! Read all the necessary temporal varying data
+      select case(flag)
+        case(1) ! Baroclinicity
+          ! Practical Salinity
+          BC3D_SP = read_nc_var(NC_ID,'salinity  ',1)
+          ! Temperature 
+          BC3D_T  = read_nc_var(NC_ID,'water_temp',1)
+        case(2) ! Velocity
+          ! East-West velocity
+          BC3D_SP = read_nc_var(NC_ID,'water_u   ',1)
+          ! North-South Velocity
+          BC3D_T  = read_nc_var(NC_ID,'water_v   ',1)
+      end select
 
       ! Close NETCDF
       call Check_err(NF90_CLOSE(NC_ID))
@@ -207,7 +235,9 @@
          allocate(BC2D_NB(NX,NY),BC2D_NM(NX,NY),   &
                   BC2D_SigTS(NX,NY),BC2D_MLD(NX,NY))
          allocate(BC2D_BX(NX,NY),BC2D_BY(NX,NY-1))
-         allocate(DX(NX,NY),DY(NX,NY-1))
+         if (OutType.eq.2) allocate(BC2D_CD(NX,NY-2))
+         allocate(DX(NX,NY),DY(NX,NY-1), DUU(NX,NY), DVV(NX,NY), &
+                  DUV(NX,NY), DU(NX,NY), DV(NX,NY), B(NX,NY))
 
          ! Read the latitude, longitude and z variables 
          call Check_err(NF90_INQ_VARID(NC_ID,'lat',Temp_ID))
@@ -282,29 +312,29 @@
 !     S U B R O U T I N E   C H E C K  _  E R R
 !-----------------------------------------------------------------------
 !     jgf49.17.02 Checks the return value from netCDF calls; if there
-!     was an error, it writes the error message to the screen and to the
-!     fort.16 file.
+!     was an error, it writes the error message to the screen
 !-----------------------------------------------------------------------
       subroutine check_err(iret)
       implicit none
 
       integer, intent(in) :: iret
+      
 
       if (iret .ne. nf90_noerr) then
-         write(6,*) 'myproc = ', myProc      
-         write(6,*) 'iret  = ' , iret  
-         call MPI_Finalize(ierr); stop
+         write(6,*) 'netcdf check_err error' 
+         call MPI_Abort(MPI_Comm_World,iret,ierr)
       endif
 !-----------------------------------------------------------------------
       end subroutine check_err
 !-----------------------------------------------------------------------
 !----------------------------------------------------------------------
-      subroutine BC3DDOWNLOAD(TimeIn)
-      use ifport, only: systemqq, sleep
+      subroutine BC3DDOWNLOAD(TimeIn,flag)
+      use ifport, only: systemqq, sleep, getlasterrorqq
       
       implicit none
      
       type(datetime),intent(in) :: TimeIn
+      integer,intent(in) :: flag
       type(datetime)     :: TimeOff
       character(len=200) :: fileserver, vars, times, filemid, & 
                             fileend, expt, options
@@ -313,7 +343,7 @@
       character(len=4)   :: yyyy 
       character(len=5)   :: command 
       logical(4)         :: resOK
-      integer            :: iter, stat, fid
+      integer            :: iter, stat, fid, resINT
       integer*8          :: Fsize, FSizeTrue 
          
       ! Add on the time based on processor number 
@@ -415,18 +445,31 @@
          times   = TimeOff%strftime("%Y%m%d")//'12_t0'&
                  //TimeOff%strftime("%H")
          if (expt(6:6) == '9') then
-            fileend = '_ts3z.nc"'
+            if (flag == 1) then
+               fileend = '_ts3z.nc"'
+            elseif (flag == 2) then
+               fileend = '_uv3z.nc"'
+            endif
          else
+            if (flag == 2) return 
             fileend = '.nc"'
          endif
       elseif (BCServer == 'ncs') then
-         vars    = '?var=salinity&var=water_temp'
+         if (flag == 1) then
+            vars = '?var=salinity&var=water_temp'
+         elseif (flag == 2) then
+            vars = '?var=water_u&var=water_v'
+         endif
          times   = '&time='//TimeIn%strftime("%Y-%m-%dT%H")&
                  //'%3A00%3A00Z'
          filemid = ''
          fileend = '&vertStride=1&addLatLon=true&accept=netcdf4"'
       elseif (BCServer == 'opd') then
-         vars    = '" -v salinity,water_temp'
+         if (flag == 1) then
+            vars = '" -v salinity,water_temp'
+         elseif (flag == 2) then
+            vars = '" -v water_u,water_v'
+         endif
          times   = ' -d time,'//trim(hhh)
          fileend = ''
          filemid = ''
@@ -438,14 +481,18 @@
       !write(6,*) 'Trying to download GOFS 3.1 data: '           &
       !          //command//trim(Fullpath)//trim(options)//' -o '&
       !          //trim(BC3D_Name)
-      write(6,*) 'Downloading: ',trim(FullPath)
+      write(6,*) myProc, 'Downloading: ',trim(FullPath)
       ! Let's get expected filesize
       if (BCServer == 'ftp') then
-         FSizeTrue = 0
+         FSizeTrue = 0; 
          do while(FSizeTrue.eq.0) 
             ! Get filesize at remote location 
             resOK = systemqq(command//trim(Fullpath)//trim(options)//  &
                        ' -I -L -o filesize'//trim(adjustl(hhh))//'.txt')
+            if (.not.resOK) then
+               resINT = getlasterrorqq()
+               write(6,*) 'Error: ',resINT,myProc
+            endif
             open(newunit=fid,                                     &
                  file='filesize'//trim(adjustl(hhh))//'.txt',     &
                  status='old',action='read')
@@ -479,7 +526,8 @@
             ! Expect over a 500MB
             inquire(file=trim(BC3D_Name),size=Fsize)
             if (Fsize < FSizeTrue) then
-               write(6,*) 'FSize is: ',FSize,FSizeTrue
+               write(6,*) 'FSize of '//trim(BC3D_Name)//': ',     &
+                           FSize, FSizeTrue
                resOK = .false.
             endif
          endif
@@ -492,7 +540,7 @@
       enddo
       if (.not.resOK) then
          write(6,*) 'Error in downloading GOFS 3.1 NetCDF.'
-         call MPI_Finalize(ierr); stop
+         call MPI_Abort(MPI_Comm_World,0,ierr)
       endif
 !----------------------------------------------------------------------
       end subroutine BC3DDOWNLOAD
@@ -500,24 +548,32 @@
 !     S U B R O U T I N E  C A L C _ B C 2 D _ T E R M S
 !-----------------------------------------------------------------------
 !-----------------------------------------------------------------------
-      subroutine Calc_BC2D_Terms()
+      subroutine Calc_BC2D_Terms(flag)
       implicit none
-      
-      real*8 :: rho, rhoavg, bx_avg, by_avg, bx_z, by_z
-      real*8 :: uavg, vavg, DU, DV, DZ, DUUX, DVVY, DUVX, DUVY, xx, yy
+     
+      integer,intent(in) :: flag 
+      real*8 :: rho, rhoavg, bx_avg, by_avg, bx_z, by_z, DZ
+      real*8 :: uavg, vavg, DUUX, DVVY, DUVX, DUVY, Vel, CDx, CDy 
       real*8 :: SA(NZ), CT(NZ), Lat(NZ), N2(NZ-1), zmid(NZ-1)
-      integer  :: i, j, k, ii, kb, kbx, kby, kbuu, kbuv, kbvv
-      real(sz) :: FV = -3d4, FVP = -3d4 + 1d-3 
+      integer  :: i, j, k, ii, kb, kbx, kby, ip, im
+      real(sz) :: FV = -3d4, FVP = -3d4 + 1d-3, Vs = 1d-3 
 
+      select case(flag)
+      
+      !! FOR SALINITY & TEMPERATURE 
+      case(1)
       ! Loop over all cells to get the baroclinic pressure and the
       ! buoyancy frequencies
+!!$omp parallel private(Lat,kb,DZ,rho,rhoavg,kbx,kby,bx_avg,by_avg, &
+!!$omp bx_z,by_z,SA,CT,N2,zmid)
+!!$omp do
       do j = 1,NY
          ! Need an array of latitude values for Nsquared call
          Lat = BC3D_Lat(j)
          do i = 1,NX
             ! Initialize the free surface density and dispersion values
             BC2D_SigTS(i,j) = SigT0
-            kb = 0; kbuu = 0; kbvv = 0; kbuv = 0
+            kb = 0; 
             do k = 1,NZ
                if (k > 1) DZ = BC3D_Z(k) - BC3D_Z(k-1)
                ! For the baroclinic pressure gradient and surface
@@ -566,8 +622,11 @@
                ! Divide by the depth
                BC2D_NM(i,j) = BC2D_NM(i,j)/BC3D_Z(kb)
                ! Get the mixed-layer depth
-               BC2D_MLD(i,j) = min(BC3D_Z(kb),&
-                               gsw_mlp(SA(1:kb),CT(1:kb),BC3D_Z(1:kb)))
+               !BC2D_MLD(i,j) = min(BC3D_Z(kb),&
+               !                gsw_mlp(SA(1:kb),CT(1:kb),BC3D_Z(1:kb)))
+               ! Get the mixed-layer depth ratio
+               BC2D_MLD(i,j) = min(DFV,&
+                     gsw_mlp(SA(1:kb),CT(1:kb),BC3D_Z(1:kb))/BC3D_Z(kb))
             else
                ! Let's just set to zero value 
                BC2D_NB(i,j)  = 0.0d0
@@ -576,9 +635,11 @@
             endif
          enddo
       enddo 
+!!$omp end do
       ! Now calculate the gradients of the BCP and integrate,
       ! and calculate gradients of DUU, DVU and DVV
       ! (we do central difference about the mid-point)
+!!$omp do
       do j = 1,NY 
          do i = 1,NX
             kbx = 0; kby = 0;
@@ -632,6 +693,79 @@
             endif
          enddo
       enddo
+!!$omp end do
+!!$omp end parallel
+
+      !! FOR VELOCITIES 
+      case(2)
+!!$omp parallel private(kb,DZ,uavg,vavg,ip,im,DUUX,DUVY,DUVX,DVVY,Vel,CDx,CDy)
+!!$omp do
+      ! Loop over all cells to get the depth-integrated momentum dispersion
+      do j = 1,NY
+         do i = 1,NX
+            ! Initialize the dispersion values
+            DUU(i,j) = 0d0; DVV(i,j) = 0d0; DUV(i,j) = 0d0;
+            DU(i,j) = 0d0; DV(i,j) = 0d0; B(i,j) = 0d0; 
+            kb = 0; 
+            do k = 2,NZ
+               ! For depth-integrated dispersion 
+               if (BC3D_SP(i,j,k) < FVP .or. BC3D_T(i,j,k) < FVP) exit
+               DZ = BC3D_Z(k) - BC3D_Z(k-1)
+               ! The trapezoidal rule
+               uavg = 0.5d0*(BC3D_SP(i,j,k) + BC3D_SP(i,j,k-1))
+               vavg = 0.5d0*(BC3D_T(i,j,k) + BC3D_T(i,j,k-1))
+               DUU(i,j) = DUU(i,j) + DZ*uavg*uavg
+               DVV(i,j) = DVV(i,j) + DZ*vavg*vavg
+               DUV(i,j) = DUV(i,j) + DZ*uavg*vavg
+               DU(i,j)  = DU(i,j) + DZ*uavg
+               DV(i,j)  = DV(i,j) + DZ*vavg
+               kb = k
+            enddo
+            ! Now calculate dispersion values
+            if (kb > 1) then
+               ! In depth-averaged form
+               B(i,j)   = BC3D_Z(kb)
+               DU(i,j)  = DU(i,j) /B(i,j)
+               DV(i,j)  = DV(i,j) /B(i,j)
+               DUU(i,j) = DUU(i,j)/B(i,j) - DU(i,j)*DU(i,j) 
+               DVV(i,j) = DVV(i,j)/B(i,j) - DV(i,j)*DV(i,j)
+               DUV(i,j) = DUV(i,j)/B(i,j) - DU(i,j)*DV(i,j)
+            endif
+         enddo
+      enddo 
+!!$omp end do
+
+      ! Now calculate the gradients of DUU, DUV and DVV
+      ! (we do central difference about original point)
+!!$omp do
+      do j = 2,NY-1 
+         do i = 1,NX
+            ip = i + 1
+            im = i - 1
+            if (ip > NX) ip = 1
+            if (im < 1)  im = NX
+                        
+            if (abs(DU(i,j)) < Vs .or. abs(DV(i,j)) < Vs .or. &
+                abs(DU(im,j)) < Vs .or. abs(DU(ip,j)) < Vs .or. &
+                abs(DV(i,j+1)) < Vs .or. abs(DV(i,j-1)) < Vs) then
+               BC2D_CD(i,j-1) = 0d0; cycle
+            endif
+
+            DUUX = 0.5d0*( DUU(ip,j) - DUU(im,j) )*B(i,j) / DX(i,j)
+            DUVX = 0.5d0*( DUV(ip,j) - DUV(im,j) )*B(i,j) / DX(i,j)
+            DVVY = 0.5d0*( DVV(i,j+1)  - DVV(i,j-1) )*B(i,j) / DY(i,j)
+            DUVY = 0.5d0*( DUV(i,j+1)  - DUV(i,j-1) )*B(i,j) / DY(i,j)
+
+            Vel  = sqrt(DU(i,j)*DU(i,j) + DV(i,j)*DV(i,j)) 
+            CDx  = ( DUUX + DUVY ) / ( DU(i,j) * Vel )
+            CDy  = ( DVVY + DUVX ) / ( DV(i,j) * Vel )   
+
+            BC2D_CD(i,j-1) = sqrt(CDx*CDx + CDy*CDy)
+         enddo
+      enddo
+!!$omp end do
+!!$omp end parallel
+      end select
 !-----------------------------------------------------------------------
       end subroutine Calc_BC2D_Terms
 !-----------------------------------------------------------------------
@@ -675,8 +809,8 @@
          call check_err(nf90_def_dim(ncid, 'strlen', 16, strlen_dim_id))
          call check_err(nf90_def_dim(ncid,'NX',NX,NX_dim_id))
          call check_err(nf90_def_dim(ncid,'NY',NY,NY_dim_id))
-         call check_err(nf90_def_dim(ncid,'NZ',NZ,NZ_dim_id))
          call check_err(nf90_def_dim(ncid,'NYY',NY-1,NYY_dim_id))
+         call check_err(nf90_def_dim(ncid,'NYYY',NY-2,NYYY_dim_id))
          ! Define vars 
          data_dims = [strlen_dim_id, timenc_dim_id, 1]
          call def_var_att(ncid,'time',nf90_char, data_dims(1:2), &
@@ -685,12 +819,12 @@
                           lon_id,'longitude','degrees')
          call def_var_att(ncid,'lat',nf90_double, [NY_dim_id], &
                           lat_id,'latitude','degrees')
-         call def_var_att(ncid,'depth',nf90_double, [NZ_dim_id],  &
-                          depth_id,'depth below sea level','m')
          call def_var_att(ncid,'lonc',nf90_double, [NX_dim_id], &
                           lonc_id,'longitude for BPGX','degrees')
          call def_var_att(ncid,'latc',nf90_double, [NYY_dim_id], &
                           latc_id,'latitude for BPGY','degrees')
+         call def_var_att(ncid,'lats',nf90_double, [NYYY_dim_id], &
+                          lats_id,'latitude for CDisp','degrees')
          data_dims = [NX_dim_id, NY_dim_id, timenc_dim_id]
          call def_var_att(ncid,'BPGX',nf90_type, data_dims, BPGX_id,   &
                         'east-west depth-averaged baroclinic pressure '&
@@ -707,20 +841,30 @@
          call def_var_att(ncid,'SigTS',nf90_type, data_dims,   &
                           SigTS_id, 'surface sigmat density',  &
                           'kgm^-3',SigT0)
+         !call def_var_att(ncid,'MLD',nf90_type, data_dims, MLD_id, &
+         !                 'mixed-layer depth','m',DFV)
          call def_var_att(ncid,'MLD',nf90_type, data_dims, MLD_id, &
-                          'mixed-layer depth','m',DFV)
+                          'mixed-layer depth ratio','[]',DFV)
+         if (OutType.eq.2) then
+            data_dims = [NX_dim_id, NYYY_dim_id, timenc_dim_id]
+            call def_var_att(ncid,'CDisp',nf90_type, data_dims, CD_id, &
+                   'momentum dispersion quadratic bottom friction','[]')
+         endif
          ! Allowing vars to deflate
          call check_err(nf90_def_var_deflate(ncid, lon_id, 1, 1, dfl))
          call check_err(nf90_def_var_deflate(ncid, lat_id, 1, 1, dfl))
-         call check_err(nf90_def_var_deflate(ncid, depth_id, 1, 1, dfl))
          call check_err(nf90_def_var_deflate(ncid, lonc_id, 1, 1, dfl))
          call check_err(nf90_def_var_deflate(ncid, latc_id, 1, 1, dfl))
+         call check_err(nf90_def_var_deflate(ncid, lats_id, 1, 1, dfl))
          call check_err(nf90_def_var_deflate(ncid, BPGX_id, 1, 1, dfl))
          call check_err(nf90_def_var_deflate(ncid, BPGY_id, 1, 1, dfl))
          call check_err(nf90_def_var_deflate(ncid, NB_id, 1, 1, dfl))
          call check_err(nf90_def_var_deflate(ncid, NM_id, 1, 1, dfl))
          call check_err(nf90_def_var_deflate(ncid, SigTS_id, 1, 1, dfl))
          call check_err(nf90_def_var_deflate(ncid, MLD_id, 1, 1, dfl))
+         if (OutType.eq.2) then
+            call check_err(nf90_def_var_deflate(ncid, CD_id, 1, 1, dfl))
+         endif
          ! Close define mode
          call check_err(nf90_close(ncid))
          
@@ -744,7 +888,7 @@
          call check_err(nf90_put_var(ncid, lat_id, BC3D_Lat))
          call check_err(nf90_put_var(ncid, latc_id, &
               0.5d0*(BC3D_Lat(1:NY-1) + BC3D_Lat(2:NY))))
-         call check_err(nf90_put_var(ncid, depth_id, BC3D_Z))
+         call check_err(nf90_put_var(ncid, lats_id, BC3D_Lat(2:NY-1)))
          call check_err(nf90_close(ncid))
       endif
       ! Barrier to ensure wait until netcdf is created by first
@@ -773,6 +917,9 @@
          call check_err(nf90_inq_varid(ncid,'NM', NM_id))
          call check_err(nf90_inq_varid(ncid,'SigTS', SigTS_id))
          call check_err(nf90_inq_varid(ncid,'MLD', MLD_id))
+         if (OutType.eq.2) then
+            call check_err(nf90_inq_varid(ncid,'CDisp', CD_id))
+         endif
          call check_err(nf90_close(ncid))
       endif
  
@@ -809,7 +956,7 @@
       subroutine UpdateNetCDF(IT)
       implicit none
       integer, intent(in) :: IT
-      integer,dimension(3) :: start, kount, kountX, kountY
+      integer,dimension(3) :: start, kount, kountX, kountY, kountYY
       integer  :: dmy, mpistat(mpi_status_size)
     
       ! Make netcdf/get dimension and variable IDs 
@@ -820,6 +967,7 @@
       start = [1, 1, mnProc*IT + myProc + tsind];
       kount = [NX, NY, 1];
       kountY = [NX, NY-1, 1];
+      kountYY = [NX, NY-2, 1];
  
       if ( (IT > 0 .or. myProc > 0) .and. mnProc > 1) then
          ! Receiving message from prev processor to start writing
@@ -838,6 +986,9 @@
       call put_var(ncid, NM_id, BC2D_NM, start, kount)
       call put_var(ncid, SigTS_id, BC2D_SigTS, start, kount)
       call put_var(ncid, MLD_id, BC2D_MLD, start, kount)
+      if (OutType.eq.2) then
+         call put_var(ncid, CD_id, BC2D_CD, start, kountYY)
+      endif
       call check_err(nf90_close(ncid))
 
       if (mnProc > 1) then
