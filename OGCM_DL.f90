@@ -9,15 +9,16 @@
       use gsw_mod_toolbox, only: gsw_SA_from_SP, gsw_rho, gsw_CT_from_t&
           , gsw_Nsquared, gsw_mlp
       implicit none
-!     This program downloads OGCM data (e.g. GOFS 3.1 HYCOM), and computes the 
-!     baroclinic pressure gradient term, buoyancy frequencies, sea
-!     surface denity, sea surface temperature, and mixed-layer depth
-!     on the structured grid, outputting it to a compressed NetCDF file
+!     This program downloads OGCM data (e.g. GOFS 3.1 HYCOM), and computes  
+!     depth-averaged baroclinic pressure gradients, buoyancy frequencies, 
+!     sea surface density, and mixed-layer depth ratio on the structured 
+!     grid, outputting it to a compressed NetCDF file
 !
-!      -or- 
+!      -and (if required)- 
 !
-!     Computes the depth-integrated momentum dispersion term and the
-!     depth-integrated momentum diffusion term for OGCM 3D velocities
+!     Computes depth-averaged momentum dispersion, momentum dispersion
+!     as a quadratic bottom friction coefficient, and depth-averaged 
+!     kinetic energy from OGCM 3D velocities
 
 !     Use below two lines for output in single precision (saves space)
       integer  :: nf90_type = nf90_float  ! Type to store matrix arrays in NetCDF
@@ -116,9 +117,9 @@
          read(5,*) BCServer; print *, 'BCServer = ', BCServer
          read(5,*) OutType
          if (OutType == 1) then
-            write(6,*) 'INFO: Compute & output T and S only '
+            write(6,*) 'INFO: Compute & output T and S only'
          elseif (OutType == 2) then
-            write(6,*) 'INFO: Compute & output T, S, U, V '
+            write(6,*) 'INFO: Compute & output T, S, U, V'
          else
             write(6,*) 'ERROR: Invalid OutType = ',OutType
             call MPI_Finalize(ierr); stop
@@ -733,7 +734,7 @@
                DU(i,j)  = DU(i,j)/B(i,j)
                DV(i,j)  = DV(i,j)/B(i,j)
                ! Depth-averaged kinetic energy
-               BC2D_KE(i,j)  = (DUU(i,j) + DVV(i,j)) / B(i,j)
+               BC2D_KE(i,j)  = 0.5d0*( DUU(i,j) + DVV(i,j) ) / B(i,j)
                ! Depth-averaged dispersion
                DUU(i,j) = DUU(i,j)/B(i,j) - DU(i,j)*DU(i,j) 
                DVV(i,j) = DVV(i,j)/B(i,j) - DV(i,j)*DV(i,j)
