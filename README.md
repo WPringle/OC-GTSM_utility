@@ -1,6 +1,6 @@
 # OC-GTSM_utility
 
-This utility downloads GOFS 3.1 Ocean Global Circulation Model (OGCM) salinity and temperature data, and computes 2D variables required for a ocean-circulation coupled Global Tide and Surge Model (OC-GTSM).
+This utility downloads GOFS 3.1 Ocean Global Circulation Model (OGCM) salinity and temperature (and velocity if required) data, and computes 2D variables required for a ocean-circulation coupled Global Tide and Surge Model (OC-GTSM).
 
 See https://www.hycom.org/dataserver/gofs-3pt1/analysis for details on GOFS 3.1 (HYCOM model)
 
