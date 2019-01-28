@@ -42,7 +42,8 @@
       real*8,allocatable,dimension(:) :: BC3D_Lon, BC3D_Lat, BC3D_Z
       real(sz),allocatable,dimension(:,:,:) :: BC3D_SP, BC3D_T, BC3D_BCP
       real(sz),allocatable,dimension(:,:) :: BC2D_NM, BC2D_NB, BC2D_BX,&
-                                  BC2D_SigTS, BC2D_BY, BC2D_MLD, BC2D_CD
+                                BC2D_SigTS, BC2D_BY, BC2D_MLD, BC2D_CD,&
+                                BC2D_DispX, BC2D_DispY, BC2D_KE
       real*8,allocatable,dimension(:,:) :: DX, DY, DUU, DVV, DUV, DU,  &
                                            DV, B
 !     Variables for temporal integration
@@ -56,8 +57,9 @@
       character(len=40) :: BC2D_Name ! Name of Output File
       integer :: ncid, ncformat, timenc_id, timenc_dim_id, NX_dim_id,  &
               CD_id, NYYY_dim_id, NY_dim_id, NYY_dim_id, MLD_id, NM_id,&
-              SigTS_id, BPGX_id, BPGY_id, NB_id, lon_id, lat_id, &
-              latc_id, lats_id, lonc_id, strlen_dim_id
+              SigTS_id, BPGX_id, BPGY_id, NB_id, lon_id, lat_id, KE_id,&
+              latc_id, lats_id, lonc_id, strlen_dim_id, DispX_id, &
+              DispY_id
 !-----------------------------------------------------------------------
 
 !.......Initialize MPI
@@ -232,12 +234,15 @@
          ! Allocate the lat lon and z arrays first 
          allocate(BC3D_Lat(NY),BC3D_Lon(NX),BC3D_Z(NZ))
          allocate(BC3D_SP(NX,NY,NZ),BC3D_T(NX,NY,NZ),BC3D_BCP(NX,NY,NZ))
-         allocate(BC2D_NB(NX,NY),BC2D_NM(NX,NY),   &
+         allocate(BC2D_NB(NX,NY),BC2D_NM(NX,NY),BC2D_KE(NX,NY), &
                   BC2D_SigTS(NX,NY),BC2D_MLD(NX,NY))
-         allocate(BC2D_BX(NX,NY),BC2D_BY(NX,NY-1))
-         if (OutType.eq.2) allocate(BC2D_CD(NX,NY-2))
-         allocate(DX(NX,NY),DY(NX,NY-1), DUU(NX,NY), DVV(NX,NY), &
-                  DUV(NX,NY), DU(NX,NY), DV(NX,NY), B(NX,NY))
+         allocate(BC2D_BX(NX,NY),BC2D_BY(NX,NY-1),DX(NX,NY),DY(NX,NY-1))
+         if (OutType.eq.2) then
+            allocate(BC2D_CD(NX,NY-2),BC2D_DispX(NX,NY-2),&
+                     BC2D_DispY(NX,NY-2))
+            allocate(DUU(NX,NY), DVV(NX,NY), &
+                     DUV(NX,NY), DU(NX,NY), DV(NX,NY), B(NX,NY))
+         endif
 
          ! Read the latitude, longitude and z variables 
          call Check_err(NF90_INQ_VARID(NC_ID,'lat',Temp_ID))
@@ -706,7 +711,7 @@
             ! Initialize the dispersion values
             DUU(i,j) = 0d0; DVV(i,j) = 0d0; DUV(i,j) = 0d0;
             DU(i,j) = 0d0; DV(i,j) = 0d0; B(i,j) = 0d0; 
-            kb = 0; 
+            BC2D_KE(i,j) = 0d0; kb = 0; 
             do k = 2,NZ
                ! For depth-integrated dispersion 
                if (BC3D_SP(i,j,k) < FVP .or. BC3D_T(i,j,k) < FVP) exit
@@ -721,12 +726,15 @@
                DV(i,j)  = DV(i,j) + DZ*vavg
                kb = k
             enddo
-            ! Now calculate dispersion values
+            ! Now calculate dispersion values in depth-averaged form
             if (kb > 1) then
-               ! In depth-averaged form
                B(i,j)   = BC3D_Z(kb)
-               DU(i,j)  = DU(i,j) /B(i,j)
-               DV(i,j)  = DV(i,j) /B(i,j)
+               ! Depth-averaged velocities
+               DU(i,j)  = DU(i,j)/B(i,j)
+               DV(i,j)  = DV(i,j)/B(i,j)
+               ! Depth-averaged kinetic energy
+               BC2D_KE(i,j)  = (DUU(i,j) + DVV(i,j)) / B(i,j)
+               ! Depth-averaged dispersion
                DUU(i,j) = DUU(i,j)/B(i,j) - DU(i,j)*DU(i,j) 
                DVV(i,j) = DVV(i,j)/B(i,j) - DV(i,j)*DV(i,j)
                DUV(i,j) = DUV(i,j)/B(i,j) - DU(i,j)*DV(i,j)
@@ -745,22 +753,29 @@
             if (ip > NX) ip = 1
             if (im < 1)  im = NX
                         
-            if (abs(DU(i,j)) < Vs .or. abs(DV(i,j)) < Vs .or. &
-                abs(DU(im,j)) < Vs .or. abs(DU(ip,j)) < Vs .or. &
-                abs(DV(i,j+1)) < Vs .or. abs(DV(i,j-1)) < Vs) then
-               BC2D_CD(i,j-1) = 0d0; cycle
+            if (abs(DU(i,j)) < Vs .or. abs(DV(i,j)) < Vs .or.      &
+                B(ip,j) < BC3D_Z(2) .or. B(im,j) < BC3D_Z(2) .or.  & 
+                B(i,j+1) < BC3D_Z(2) .or. B(i,j-1) < BC3D_Z(2)) then
+               BC2D_CD(i,j-1) = 0d0
+               BC2D_DispX(i,j-1) = 0d0
+               BC2D_DispY(i,j-1) = 0d0
+               cycle
             endif
 
-            DUUX = 0.5d0*( DUU(ip,j) - DUU(im,j) )*B(i,j) / DX(i,j)
-            DUVX = 0.5d0*( DUV(ip,j) - DUV(im,j) )*B(i,j) / DX(i,j)
-            DVVY = 0.5d0*( DVV(i,j+1)  - DVV(i,j-1) )*B(i,j) / DY(i,j)
-            DUVY = 0.5d0*( DUV(i,j+1)  - DUV(i,j-1) )*B(i,j) / DY(i,j)
+            DUUX = 0.5d0*( DUU(ip,j) - DUU(im,j) ) / DX(i,j)
+            DUVX = 0.5d0*( DUV(ip,j) - DUV(im,j) ) / DX(i,j)
+            DVVY = 0.5d0*( DVV(i,j+1)  - DVV(i,j-1) ) / DY(i,j)
+            DUVY = 0.5d0*( DUV(i,j+1)  - DUV(i,j-1) ) / DY(i,j)
+
+            BC2D_DispX(i,j-1) = DUUX + DUVY
+            BC2D_DispY(i,j-1) = DVVY + DUVX
 
             Vel  = sqrt(DU(i,j)*DU(i,j) + DV(i,j)*DV(i,j)) 
-            CDx  = ( DUUX + DUVY ) / ( DU(i,j) * Vel )
-            CDy  = ( DVVY + DUVX ) / ( DV(i,j) * Vel )   
+            CDx  = B(i,j) * ( DUUX + DUVY ) / ( DU(i,j) * Vel )
+            CDy  = B(i,j) * ( DVVY + DUVX ) / ( DV(i,j) * Vel )   
 
-            BC2D_CD(i,j-1) = sqrt(CDx*CDx + CDy*CDy)
+            !BC2D_CD(i,j-1) = sqrt(CDx*CDx + CDy*CDy)
+            BC2D_CD(i,j-1) = max(abs(CDx),abs(CDy))
          enddo
       enddo
 !!$omp end do
@@ -824,7 +839,7 @@
          call def_var_att(ncid,'latc',nf90_double, [NYY_dim_id], &
                           latc_id,'latitude for BPGY','degrees')
          call def_var_att(ncid,'lats',nf90_double, [NYYY_dim_id], &
-                          lats_id,'latitude for CDisp','degrees')
+                          lats_id,'latitude for Disp','degrees')
          data_dims = [NX_dim_id, NY_dim_id, timenc_dim_id]
          call def_var_att(ncid,'BPGX',nf90_type, data_dims, BPGX_id,   &
                         'east-west depth-averaged baroclinic pressure '&
@@ -841,14 +856,21 @@
          call def_var_att(ncid,'SigTS',nf90_type, data_dims,   &
                           SigTS_id, 'surface sigmat density',  &
                           'kgm^-3',SigT0)
-         !call def_var_att(ncid,'MLD',nf90_type, data_dims, MLD_id, &
-         !                 'mixed-layer depth','m',DFV)
          call def_var_att(ncid,'MLD',nf90_type, data_dims, MLD_id, &
                           'mixed-layer depth ratio','[]',DFV)
+         !                 'mixed-layer depth','m',DFV)
          if (OutType.eq.2) then
+            call def_var_att(ncid,'KE',nf90_type, data_dims, KE_id, &
+                         'depth-averaged kinetic energy','m^2s^-2')
             data_dims = [NX_dim_id, NYYY_dim_id, timenc_dim_id]
             call def_var_att(ncid,'CDisp',nf90_type, data_dims, CD_id, &
                    'momentum dispersion quadratic bottom friction','[]')
+            call def_var_att(ncid,'DispX',nf90_type, data_dims, &
+                  DispX_id, 'depth-averaged x-momentum dispersion',&
+                  'ms^-2')
+            call def_var_att(ncid,'DispY',nf90_type, data_dims, &
+                  DispY_id, 'depth-averaged y-momentum dispersion',&
+                  'ms^-2')
          endif
          ! Allowing vars to deflate
          call check_err(nf90_def_var_deflate(ncid, lon_id, 1, 1, dfl))
@@ -863,7 +885,10 @@
          call check_err(nf90_def_var_deflate(ncid, SigTS_id, 1, 1, dfl))
          call check_err(nf90_def_var_deflate(ncid, MLD_id, 1, 1, dfl))
          if (OutType.eq.2) then
+            call check_err(nf90_def_var_deflate(ncid, KE_id, 1, 1, dfl))
             call check_err(nf90_def_var_deflate(ncid, CD_id, 1, 1, dfl))
+            call check_err(nf90_def_var_deflate(ncid, DispX_id, 1, 1, dfl))
+            call check_err(nf90_def_var_deflate(ncid, DispY_id, 1, 1, dfl))
          endif
          ! Close define mode
          call check_err(nf90_close(ncid))
@@ -918,7 +943,10 @@
          call check_err(nf90_inq_varid(ncid,'SigTS', SigTS_id))
          call check_err(nf90_inq_varid(ncid,'MLD', MLD_id))
          if (OutType.eq.2) then
+            call check_err(nf90_inq_varid(ncid,'KE', KE_id))
             call check_err(nf90_inq_varid(ncid,'CDisp', CD_id))
+            call check_err(nf90_inq_varid(ncid,'DispX', DispX_id))
+            call check_err(nf90_inq_varid(ncid,'DispY', DispY_id))
          endif
          call check_err(nf90_close(ncid))
       endif
@@ -987,7 +1015,10 @@
       call put_var(ncid, SigTS_id, BC2D_SigTS, start, kount)
       call put_var(ncid, MLD_id, BC2D_MLD, start, kount)
       if (OutType.eq.2) then
+         call put_var(ncid, KE_id, BC2D_KE, start, kount)
          call put_var(ncid, CD_id, BC2D_CD, start, kountYY)
+         call put_var(ncid, DispX_id, BC2D_DispX, start, kountYY)
+         call put_var(ncid, DispY_id, BC2D_DispY, start, kountYY)
       endif
       call check_err(nf90_close(ncid))
 
