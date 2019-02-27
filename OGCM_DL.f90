@@ -53,7 +53,7 @@
       real*8,parameter :: RhoWat0 = 1d3, PI = 3.141592653589793D0,     &
                        deg2rad = PI/180d0, Rearth = 6378206.4d0,       &
                        G = 9.80665d0
-      real(sz),parameter :: SigT0 = 0d0, DFV = 1d0 !DFV = 1d4 
+      real(sz),parameter :: SigT0 = -999d0, DFV = 1d0 !DFV = 1d4 
       ! Netcdf output info
       character(len=40) :: BC2D_Name ! Name of Output File
       integer :: ncid, ncformat, timenc_id, timenc_dim_id, NX_dim_id,  &
@@ -149,6 +149,7 @@
       type(timedelta) :: EndCheck
       character(len=3):: hhh 
       integer :: IT, ii
+      logical :: OKflag
 
       ! Set the output filename
       write(hhh,'(I3)') myProc
@@ -159,14 +160,15 @@
       do while (EndCheck%total_seconds() >= 0)
          do ii = 1,OutType
             ! Download new OGCM NetCDF file
-            call BC3DDOWNLOAD(CurDT,ii)
+            call BC3DDOWNLOAD(CurDT,ii,OKflag)
+            if (.not.OKflag) exit
             ! Read the OGCM NetCDF file
             call Read_BC3D_NetCDF(ii)
             ! Calculate the new BC2D terms.
             call Calc_BC2D_Terms(ii)
          end do
          ! Put new BC2D terms in netCDF output file
-         call UpdateNetCDF(IT)
+         call UpdateNetCDF(IT,OKflag)
          ! Update the time 
          CurDT = CurDT + timedelta(hours=mnProc*BC3D_DT*TMULT)
          EndCheck = TEDT - CurDT
@@ -195,11 +197,13 @@
       ! Read all the necessary temporal varying data
       select case(flag)
         case(1) ! Baroclinicity
+          write(6,*) myProc,'Processing T & S'
           ! Practical Salinity
           BC3D_SP = read_nc_var(NC_ID,'salinity  ',1)
           ! Temperature 
           BC3D_T  = read_nc_var(NC_ID,'water_temp',1)
         case(2) ! Velocity
+          write(6,*) myProc,'Processing U & V'
           ! East-West velocity
           BC3D_SP = read_nc_var(NC_ID,'water_u   ',1)
           ! North-South Velocity
@@ -272,15 +276,15 @@
       if (BC3D_Lon_s < 0d0) then
          ! Represents seam at 180/-180
          BC3Ddir = -1
-         write(6,*) 'Lon of ',trim(BC3D_Name),&
-                    ' is defined from -180 to 180'
+         !write(6,*) 'Lon of ',trim(BC3D_Name),&
+         !           ' is defined from -180 to 180'
          is = 1
       else
          ! Represents seam at 0/360
          BC3Ddir =  1
          is = maxloc(BC3D_Lon,dim=1,mask=BC3D_Lon < 180d0) + 1
-         write(6,*) 'Lon of ',trim(BC3D_Name),&
-                    ' is defined from 0 to 360, is = ',is
+         !write(6,*) 'Lon of ',trim(BC3D_Name),&
+         !           ' is defined from 0 to 360, is = ',is
       endif
       
       end subroutine Get_LonLatDepthTime
@@ -334,24 +338,29 @@
       end subroutine check_err
 !-----------------------------------------------------------------------
 !----------------------------------------------------------------------
-      subroutine BC3DDOWNLOAD(TimeIn,flag)
+      subroutine BC3DDOWNLOAD(TimeIn,flag,OKflag)
       use ifport, only: systemqq, sleep, getlasterrorqq
       
       implicit none
      
       type(datetime),intent(in) :: TimeIn
       integer,intent(in) :: flag
+      logical,intent(out) :: OKflag
+      logical(4) :: resOK
       type(datetime)     :: TimeOff
       character(len=200) :: fileserver, vars, times, filemid, & 
                             fileend, expt, options
-      character(len=280) :: FullPath, line
+      character(len=280) :: FullPath, FullPathP, line
       character(len=3)   :: hhh 
       character(len=4)   :: yyyy 
       character(len=5)   :: command 
-      logical(4)         :: resOK
-      integer            :: iter, stat, fid, resINT
+      integer            :: iter, stat, fid, resINT, &
+                            mpistat(mpi_status_size)
       integer*8          :: Fsize, FSizeTrue 
-         
+       
+      ! OKflag is false by default    
+      OKflag = .false.
+      
       ! Add on the time based on processor number 
       TimeOff  = TimeIn - timedelta(hours=12)
       yyyy     = TimeOff%strftime("%Y")
@@ -376,8 +385,8 @@
          fileserver = '"http://tds.hycom.org/thredds/dodsC/GLBv0.08/'
          options    = ' -4 -O '
       endif
-      if (TimeOff%getYear().eq.2018) then
-         ! GOFS 3.1 analysis
+      if (TimeOff%getYear().ge.2018) then
+         ! GOFS 3.1 analysis 
          expt = 'expt_93.0'
          filemid = '/hycom_glbv_930_'
          if (BCServer == 'ftp') then
@@ -457,7 +466,9 @@
                fileend = '_uv3z.nc"'
             endif
          else
-            if (flag == 2) return 
+            if (flag == 2) then
+               OKflag = .true.; return
+            endif 
             fileend = '.nc"'
          endif
       elseif (BCServer == 'ncs') then
@@ -483,15 +494,11 @@
       ! Get the final path
       Fullpath = trim(fileserver)//trim(expt)//trim(vars)       &
                //trim(filemid)//trim(times)//trim(fileend) 
-      ! Getting GOFS data
-      !write(6,*) 'Trying to download GOFS 3.1 data: '           &
-      !          //command//trim(Fullpath)//trim(options)//' -o '&
-      !          //trim(BC3D_Name)
-      write(6,*) myProc, 'Downloading: ',trim(FullPath)
+      
       ! Let's get expected filesize
       if (BCServer == 'ftp') then
          FSizeTrue = 0; 
-         do while(FSizeTrue.eq.0) 
+         !do while(FSizeTrue.eq.0) 
             ! Get filesize at remote location 
             resOK = systemqq(command//trim(Fullpath)//trim(options)//  &
                        ' -I -L -o filesize'//trim(adjustl(hhh))//'.txt')
@@ -512,19 +519,34 @@
                enddo
             close(fid)
             if (FSizeTrue.eq.0) then
-               ! Non-existant file. Try 3 hours behind
-               TimeOff = TimeOff - timedelta(hours=3)
-               times   = TimeOff%strftime("%Y%m%d")//'12_t0'       &
-                       //TimeOff%strftime("%H")
-               Fullpath = trim(fileserver)//trim(expt)//trim(vars) &
-                        //trim(filemid)//trim(times)//trim(fileend)
+               ! Non-existant file. 
+               ! Try forecast
+               !TimeOff = TimeOff - timedelta(hours=24)
+               !times   = TimeOff%strftime("%Y%m%d")//'12_t0'       &
+               !        //TimeOff%getHour + 24
+               !Fullpath = trim(fileserver)//trim(expt)//trim(vars) &
+               !        //trim(filemid)//trim(times)//trim(fileend)
+               !if (FullPath.eq.FullPathP) then
+               !   write(6,*) myProc,                               &
+               !             'Previous and current paths are equal'
+               !endif
+               ! Try BC3D_DT hours ahead
+               !TimeOff = TimeOff + timedelta(hours=BC3D_DT)
+               !times   = TimeOff%strftime("%Y%m%d")//'12_t0'       &
+               !        //TimeOff%strftime("%H")
+               !Fullpath = trim(fileserver)//trim(expt)//trim(vars) &
+               !        //trim(filemid)//trim(times)//trim(fileend)
+               write(6,*) myProc,'no data available at: ',trim(FullPath)
+               return ! return error
             endif 
-         enddo
+         !enddo
       else
          ! Expect over a 500MB
          FSizeTrue = 5e8
       endif
-      iter = 0; resOK = .false.
+      
+      write(6,*) myProc, 'Downloading: ',trim(FullPath)
+      iter = 0; resOK = .false. 
       do while (.not.resOK.and.iter < 25) 
          resOK = systemqq(command//trim(Fullpath)//trim(options)//&
                          ' -o'//trim(BC3D_Name))
@@ -546,7 +568,10 @@
       enddo
       if (.not.resOK) then
          write(6,*) 'Error in downloading GOFS 3.1 NetCDF.'
-         call MPI_Abort(MPI_Comm_World,0,ierr)
+         call MPI_Abort(MPI_Comm_World,0,ierr) 
+      else
+         write(6,*) myProc,'download successfull'
+         OKflag = .true.
       endif
 !----------------------------------------------------------------------
       end subroutine BC3DDOWNLOAD
@@ -559,7 +584,7 @@
      
       integer,intent(in) :: flag 
       real*8 :: rho, rhoavg, bx_avg, by_avg, bx_z, by_z, DZ
-      real*8 :: uavg, vavg, DUUX, DVVY, DUVX, DUVY, Vel, CDx, CDy 
+      real*8 :: uavg, vavg, DUUX, DVVY, DUVX, DUVY, Vel, CD, CDx, CDy 
       real*8 :: SA(NZ), CT(NZ), Lat(NZ), N2(NZ-1), zmid(NZ-1)
       integer  :: i, j, k, ii, kb, kbx, kby, ip, im
       real(sz) :: FV = -3d4, FVP = -3d4 + 1d-3, Vs = 1d-3 
@@ -577,7 +602,7 @@
          ! Need an array of latitude values for Nsquared call
          Lat = BC3D_Lat(j)
          do i = 1,NX
-            ! Initialize the free surface density and dispersion values
+            ! Initialize the free surface density
             BC2D_SigTS(i,j) = SigT0
             kb = 0; 
             do k = 1,NZ
@@ -771,12 +796,17 @@
             BC2D_DispX(i,j-1) = DUUX + DUVY
             BC2D_DispY(i,j-1) = DVVY + DUVX
 
-            Vel  = sqrt(DU(i,j)*DU(i,j) + DV(i,j)*DV(i,j)) 
-            CDx  = B(i,j) * ( DUUX + DUVY ) / ( DU(i,j) * Vel )
-            CDy  = B(i,j) * ( DVVY + DUVX ) / ( DV(i,j) * Vel )   
-
+            CD = BC2D_DispX(i,j-1)*DU(i,j) + BC2D_DispY(i,j-1)*DV(i,j)
+            if (CD <= 0d0) then
+               BC2D_CD(i,j-1) = 0d0
+            else
+               Vel  = sqrt(DU(i,j)*DU(i,j) + DV(i,j)*DV(i,j)) 
+               BC2D_CD(i,j-1) = CD * B(i,j) / Vel**3
+            endif 
+            !CDx  = B(i,j) * ( DUUX + DUVY ) / ( DU(i,j) * Vel )
+            !CDy  = B(i,j) * ( DVVY + DUVX ) / ( DV(i,j) * Vel )   
             !BC2D_CD(i,j-1) = sqrt(CDx*CDx + CDy*CDy)
-            BC2D_CD(i,j-1) = max(abs(CDx),abs(CDy))
+            !BC2D_CD(i,j-1) = max(abs(CDx),abs(CDy))
          enddo
       enddo
 !!$omp end do
@@ -982,50 +1012,64 @@
 !-----------------------------------------------------------------------
 !     S U B R O U T I N E    I N I T _ N E T C D F
 !-----------------------------------------------------------------------
-      subroutine UpdateNetCDF(IT)
+      subroutine UpdateNetCDF(IT,OKflag)
       implicit none
       integer, intent(in) :: IT
+      logical, intent(in) :: OKflag
       integer,dimension(3) :: start, kount, kountX, kountY, kountYY
-      integer  :: dmy, mpistat(mpi_status_size)
+      integer  :: startT, mpistat(mpi_status_size)
     
       ! Make netcdf/get dimension and variable IDs 
       if (IT.eq.0) then 
          call initNetCDF()
       endif
 
-      start = [1, 1, mnProc*IT + myProc + tsind];
+      !start = [1, 1, mnProc*IT + myProc + tsind];
       kount = [NX, NY, 1];
       kountY = [NX, NY-1, 1];
       kountYY = [NX, NY-2, 1];
  
       if ( (IT > 0 .or. myProc > 0) .and. mnProc > 1) then
          ! Receiving message from prev processor to start writing
-         call mpi_recv(dmy,1,mpi_integer,prevProc,0,MPI_Comm_World,&
+         call mpi_recv(startT,1,mpi_integer,prevProc,0,MPI_Comm_World,&
                        mpistat,ierr)
       endif
-      write(6,*) 'UpdateNetCDF:',myProc,CurDT%strftime("%Y-%m-%d %H:%M")
-      
-      call check_err(nf90_open(BC2D_Name, nf90_write, ncid))
-      call check_err(nf90_put_var(ncid, timenc_id,    &
-                     CurDT%strftime("%Y-%m-%d %H:%M"),&
-                     [1, start(3)],[16, kount(3)]))
-      call put_var(ncid, BPGX_id,BC2D_BX, start, kount)
-      call put_var(ncid, BPGY_id, BC2D_BY, start, kountY)
-      call put_var(ncid, NB_id, BC2D_NB, start, kount)
-      call put_var(ncid, NM_id, BC2D_NM, start, kount)
-      call put_var(ncid, SigTS_id, BC2D_SigTS, start, kount)
-      call put_var(ncid, MLD_id, BC2D_MLD, start, kount)
-      if (OutType.eq.2) then
-         call put_var(ncid, KE_id, BC2D_KE, start, kount)
-         call put_var(ncid, CD_id, BC2D_CD, start, kountYY)
-         call put_var(ncid, DispX_id, BC2D_DispX, start, kountYY)
-         call put_var(ncid, DispY_id, BC2D_DispY, start, kountYY)
+
+      if (OKflag) then
+         if ((IT.eq.0.and.myProc.eq.0).or.mnProc.eq.1) then
+            startT = tsind + IT
+         else
+            startT = startT + 1
+         endif
+         start = [1, 1, startT];
+         write(6,*) 'UpdateNetCDF:',myProc,&
+                    CurDT%strftime("%Y-%m-%d %H:%M")
+         call check_err(nf90_open(BC2D_Name, nf90_write, ncid))
+         call check_err(nf90_put_var(ncid, timenc_id,    &
+                        CurDT%strftime("%Y-%m-%d %H:%M"),&
+                        [1, start(3)],[16, kount(3)]))
+         call put_var(ncid, BPGX_id,BC2D_BX, start, kount)
+         call put_var(ncid, BPGY_id, BC2D_BY, start, kountY)
+         call put_var(ncid, NB_id, BC2D_NB, start, kount)
+         call put_var(ncid, NM_id, BC2D_NM, start, kount)
+         call put_var(ncid, SigTS_id, BC2D_SigTS, start, kount)
+         call put_var(ncid, MLD_id, BC2D_MLD, start, kount)
+         if (OutType.eq.2) then
+            call put_var(ncid, KE_id, BC2D_KE, start, kount)
+            call put_var(ncid, CD_id, BC2D_CD, start, kountYY)
+            call put_var(ncid, DispX_id, BC2D_DispX, start, kountYY)
+            call put_var(ncid, DispY_id, BC2D_DispY, start, kountYY)
+         endif
+         call check_err(nf90_close(ncid))
+      else
+         write(6,*) 'Skipping Update of NetCDF:',&
+                     myProc,CurDT%strftime("%Y-%m-%d %H:%M")
       endif
-      call check_err(nf90_close(ncid))
 
       if (mnProc > 1) then
          ! Telling next processor to start writing 
-         call mpi_send(1,1,mpi_integer,nextProc,0,MPI_Comm_World,ierr)
+         call mpi_send(startT,1,mpi_integer,nextProc,0,&
+                       MPI_Comm_World,ierr)
       endif
  
       end subroutine UpdateNetCDF
