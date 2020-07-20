@@ -29,3 +29,12 @@ make</br>
 Note: I used MVAPICH2 Intel compiler,and set the -DCMAKE_Fortran_COMPILER=ifort, i.e., use:</br>
 "cmake .. -DCMAKE_Fortran_COMPILER=ifort"</br>
 when compiling GSW and datetime</br>
+
+--------------
+Please follow the "test.inp" template for configuring the control file used with executable,  i.e.,;</br>
+
+./OGCM_DL.a < test.inp
+
+-- or with MPI --
+
+mpiexec -np 4 ./OGCM_DL.a < test.inp
