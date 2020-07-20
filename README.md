@@ -12,22 +12,20 @@ This utility requires the following libraries:
 
 --------------
 Example compilation instructions on Linux system:
+-
+-> load netcdf, MPI compatible compiler, and cmake  modules</br>
+mkdir libs</br>
+cd libs</br>
+git clone https://github.com/TEOS-10/GSW-Fortran.git</br>
+cd GSW-Fortran</br>
+-> follow cmake compilation instructions on GSW-Fortran README (Make sure -DCMAKE_Fortran_COMPILER="compiler" that you will use for OC-GTSM_utility)</br>
+cd ../</br>
+git clone https://github.com/wavebitscientific/datetime-fortran.git</br>
+cd datetime-fortran</br>
+-> follow cmake compilation instructions on datetime-fortran README (Make sure -DCMAKE_Fortran_COMPILER="compiler" that you will use for OC-GTSM_utility)</br>
+cd ../../</br>
+make</br>
 
----
--> load netcdf, MPI compatible compiler, and cmake  modules
-mkdir libs
-cd libs
-git clone https://github.com/TEOS-10/GSW-Fortran.git
-cd GSW-Fortran
--> follow cmake compilation instructions on GSW-Fortran README (Make sure -DCMAKE_Fortran_COMPILER="compiler" that you will use for OC-GTSM_utility)
-cd ../
-git clone https://github.com/wavebitscientific/datetime-fortran.git
-cd datetime-fortran
--> follow cmake compilation instructions on datetime-fortran README (Make sure -DCMAKE_Fortran_COMPILER="compiler" that you will use for OC-GTSM_utility)
-cd ../../
-make
----
-
-Note: I used MVAPICH2 Intel compiler,and set the -DCMAKE_Fortran_COMPILER=ifort, i.e., use:
-"cmake .. -DCMAKE_Fortran_COMPILER=ifort"
-when compiling GSW and datetime
+Note: I used MVAPICH2 Intel compiler,and set the -DCMAKE_Fortran_COMPILER=ifort, i.e., use:</br>
+"cmake .. -DCMAKE_Fortran_COMPILER=ifort"</br>
+when compiling GSW and datetime</br>
