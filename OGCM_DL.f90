@@ -101,6 +101,7 @@
 !
       ! Read from standard input
       if (myProc.eq.0) then
+         read(5,*) ! Read blank
          read(5,'(A16)') TS;           
          read(5,'(A16)') TE;           
          TSDT = strptime(trim(TS),"%Y-%m-%d %H:%M")
@@ -114,10 +115,12 @@
             call MPI_Abort(MPI_Comm_World,0,ierr)
          endif
          read(5,*) TMULT; print *,'TMULT = ', TMULT          
-         read(5,*) BCServer; print *, 'BCServer = ', BCServer
+         read(5,'(A3)') BCServer; print *, 'BCServer = ', BCServer
          read(5,*) OutType
-         if (OutType == 1) then
-            write(6,*) 'INFO: Compute & output T and S only'
+         if (OutType == 0) then
+            write(6,*) 'INFO: Compute & output buoyancy frequencies'
+         elseif (OutType == 1) then
+            write(6,*) 'INFO: Compute & output all T and S variables'
          elseif (OutType == 2) then
             write(6,*) 'INFO: Compute & output T, S, U, V'
          else
@@ -158,7 +161,7 @@
       write(6,*) 'MyProc = ',myProc,'CurDT = ',CurDT%isoformat(' ')
       EndCheck = TEDT - CurDT; IT = 0
       do while (EndCheck%total_seconds() >= 0)
-         do ii = 1,OutType
+         do ii = 1,max(OutType,1)
             ! Download new OGCM NetCDF file
             call BC3DDOWNLOAD(CurDT,ii,OKflag)
             if (.not.OKflag) exit
@@ -239,13 +242,13 @@
          ! Allocate the lat lon and z arrays first 
          allocate(BC3D_Lat(NY),BC3D_Lon(NX),BC3D_Z(NZ))
          allocate(BC3D_SP(NX,NY,NZ),BC3D_T(NX,NY,NZ),BC3D_BCP(NX,NY,NZ))
-         allocate(BC2D_NB(NX,NY),BC2D_NM(NX,NY),BC2D_KE(NX,NY), &
+         allocate(BC2D_NB(NX,NY),BC2D_NM(NX,NY),&
                   BC2D_SigTS(NX,NY),BC2D_MLD(NX,NY))
          allocate(BC2D_BX(NX,NY),BC2D_BY(NX,NY-1),DX(NX,NY),DY(NX,NY-1))
          if (OutType.eq.2) then
             allocate(BC2D_CD(NX,NY-2),BC2D_DispX(NX,NY-2),&
                      BC2D_DispY(NX,NY-2))
-            allocate(DUU(NX,NY), DVV(NX,NY), &
+            allocate(DUU(NX,NY), DVV(NX,NY), BC2D_KE(NX,NY),&
                      DUV(NX,NY), DU(NX,NY), DV(NX,NY), B(NX,NY))
          endif
 
@@ -369,9 +372,9 @@
       ! Get servername
       if (BCServer == 'ftp') then
          ! FTP
-         !fileserver = '"ftp://ftp.hycom.org/datasets/GLBv0.08/'
-         fileserver = '"http://tds.hycom.org/thredds/fileServer/'&
-                    //'datasets/GLBv0.08/'
+         fileserver = '"ftp://ftp.hycom.org/datasets/GLBv0.08/'
+         !fileserver = '"http://tds.hycom.org/thredds/fileServer/'&
+         !           //'datasets/GLBv0.08/'
          command    = 'curl ' !'wget '
          options    = ' -s --connect-timeout 30'
       elseif (BCServer == 'ncs') then
@@ -435,7 +438,7 @@
             filemid = '/hycom_GLBv0.08_531_'
          elseif (TimeOff%getYear().lt.2004) then
             filemid = '/hycom_GLBv0.08_532_'
-         elseif (TimeOff%getYear().lt.2006) then
+         elseif (TimeOff%getYear().lt.2006.and.TimeOff%getMonth().lt.7) then
             filemid = '/hycom_GLBv0.08_533_'
          elseif (TimeOff%getYear().lt.2008) then
             filemid = '/hycom_GLBv0.08_534_'
@@ -855,8 +858,10 @@
          call check_err(nf90_def_dim(ncid, 'strlen', 16, strlen_dim_id))
          call check_err(nf90_def_dim(ncid,'NX',NX,NX_dim_id))
          call check_err(nf90_def_dim(ncid,'NY',NY,NY_dim_id))
-         call check_err(nf90_def_dim(ncid,'NYY',NY-1,NYY_dim_id))
-         call check_err(nf90_def_dim(ncid,'NYYY',NY-2,NYYY_dim_id))
+         if (OutType.gt.0) &
+           call check_err(nf90_def_dim(ncid,'NYY',NY-1,NYY_dim_id))
+         if (OutType.eq.2) &
+           call check_err(nf90_def_dim(ncid,'NYYY',NY-2,NYYY_dim_id))
          ! Define vars 
          data_dims = [strlen_dim_id, timenc_dim_id, 1]
          call def_var_att(ncid,'time',nf90_char, data_dims(1:2), &
@@ -865,31 +870,34 @@
                           lon_id,'longitude','degrees')
          call def_var_att(ncid,'lat',nf90_double, [NY_dim_id], &
                           lat_id,'latitude','degrees')
-         call def_var_att(ncid,'lonc',nf90_double, [NX_dim_id], &
+         if (OutType.gt.0) then
+           call def_var_att(ncid,'lonc',nf90_double, [NX_dim_id], &
                           lonc_id,'longitude for BPGX','degrees')
-         call def_var_att(ncid,'latc',nf90_double, [NYY_dim_id], &
+           call def_var_att(ncid,'latc',nf90_double, [NYY_dim_id], &
                           latc_id,'latitude for BPGY','degrees')
-         call def_var_att(ncid,'lats',nf90_double, [NYYY_dim_id], &
+           call def_var_att(ncid,'lats',nf90_double, [NYYY_dim_id], &
                           lats_id,'latitude for Disp','degrees')
-         data_dims = [NX_dim_id, NY_dim_id, timenc_dim_id]
-         call def_var_att(ncid,'BPGX',nf90_type, data_dims, BPGX_id,   &
+           data_dims = [NX_dim_id, NY_dim_id, timenc_dim_id]
+           call def_var_att(ncid,'BPGX',nf90_type, data_dims, BPGX_id, &
                         'east-west depth-averaged baroclinic pressure '&
                         //'gradient','ms^-2')
-         data_dims = [NX_dim_id, NYY_dim_id, timenc_dim_id]
-         call def_var_att(ncid,'BPGY',nf90_type, data_dims, BPGY_id,   &
+           data_dims = [NX_dim_id, NYY_dim_id, timenc_dim_id]
+           call def_var_att(ncid,'BPGY',nf90_type, data_dims, BPGY_id, &
                       'north-south depth-averaged baroclinic pressure '&
                         //'gradient','ms^-2')
+           data_dims = [NX_dim_id, NY_dim_id, timenc_dim_id]
+           call def_var_att(ncid,'SigTS',nf90_type, data_dims,   &
+                          SigTS_id, 'surface sigmat density',  &
+                          'kgm^-3',SigT0)
+           call def_var_att(ncid,'MLD',nf90_type, data_dims, MLD_id, &
+                          'mixed-layer depth ratio','[]',DFV)
+         !                 'mixed-layer depth','m',DFV)
+         endif
          data_dims = [NX_dim_id, NY_dim_id, timenc_dim_id]
          call def_var_att(ncid,'NB',nf90_type, data_dims, NB_id, &
                          'buoyancy frequency at the seabed','s^-1')
          call def_var_att(ncid,'NM',nf90_type, data_dims, NM_id, &
                          'depth-averaged buoyancy frequency','s^-1')
-         call def_var_att(ncid,'SigTS',nf90_type, data_dims,   &
-                          SigTS_id, 'surface sigmat density',  &
-                          'kgm^-3',SigT0)
-         call def_var_att(ncid,'MLD',nf90_type, data_dims, MLD_id, &
-                          'mixed-layer depth ratio','[]',DFV)
-         !                 'mixed-layer depth','m',DFV)
          if (OutType.eq.2) then
             call def_var_att(ncid,'KE',nf90_type, data_dims, KE_id, &
                          'depth-averaged kinetic energy','m^2s^-2')
@@ -906,20 +914,22 @@
          ! Allowing vars to deflate
          call check_err(nf90_def_var_deflate(ncid, lon_id, 1, 1, dfl))
          call check_err(nf90_def_var_deflate(ncid, lat_id, 1, 1, dfl))
-         call check_err(nf90_def_var_deflate(ncid, lonc_id, 1, 1, dfl))
-         call check_err(nf90_def_var_deflate(ncid, latc_id, 1, 1, dfl))
-         call check_err(nf90_def_var_deflate(ncid, lats_id, 1, 1, dfl))
-         call check_err(nf90_def_var_deflate(ncid, BPGX_id, 1, 1, dfl))
-         call check_err(nf90_def_var_deflate(ncid, BPGY_id, 1, 1, dfl))
+         if (OutType.gt.0) then
+            call check_err(nf90_def_var_deflate(ncid, lonc_id, 1,1,dfl))
+            call check_err(nf90_def_var_deflate(ncid, latc_id, 1,1,dfl))
+            call check_err(nf90_def_var_deflate(ncid, lats_id, 1,1,dfl))
+            call check_err(nf90_def_var_deflate(ncid, BPGX_id, 1,1,dfl))
+            call check_err(nf90_def_var_deflate(ncid, BPGY_id, 1,1,dfl))
+            call check_err(nf90_def_var_deflate(ncid, SigTS_id,1,1,dfl))
+            call check_err(nf90_def_var_deflate(ncid, MLD_id,  1,1,dfl))
+         endif
          call check_err(nf90_def_var_deflate(ncid, NB_id, 1, 1, dfl))
          call check_err(nf90_def_var_deflate(ncid, NM_id, 1, 1, dfl))
-         call check_err(nf90_def_var_deflate(ncid, SigTS_id, 1, 1, dfl))
-         call check_err(nf90_def_var_deflate(ncid, MLD_id, 1, 1, dfl))
          if (OutType.eq.2) then
-            call check_err(nf90_def_var_deflate(ncid, KE_id, 1, 1, dfl))
-            call check_err(nf90_def_var_deflate(ncid, CD_id, 1, 1, dfl))
-            call check_err(nf90_def_var_deflate(ncid, DispX_id, 1, 1, dfl))
-            call check_err(nf90_def_var_deflate(ncid, DispY_id, 1, 1, dfl))
+            call check_err(nf90_def_var_deflate(ncid, KE_id,   1,1,dfl))
+            call check_err(nf90_def_var_deflate(ncid, CD_id,   1,1,dfl))
+            call check_err(nf90_def_var_deflate(ncid, DispX_id,1,1,dfl))
+            call check_err(nf90_def_var_deflate(ncid, DispY_id,1,1,dfl))
          endif
          ! Close define mode
          call check_err(nf90_close(ncid))
@@ -929,22 +939,26 @@
          if (is == 1) then
             ! Already -180/180 orientation
             call check_err(nf90_put_var(ncid, lon_id, BC3D_Lon))
-            call check_err(nf90_put_var(ncid, lonc_id,      &
+            if (OutType.gt.0) &
+               call check_err(nf90_put_var(ncid, lonc_id,   &
                  [0.5d0*(BC3D_Lon(1:NX-1) + BC3D_Lon(2:NX)),&
                   0.5d0*(BC3D_Lon(NX) + BC3D_Lon(1)+360d0)]))
          else
             ! Change to -180/180 orientation
             call check_err(nf90_put_var(ncid, lon_id,      &
                  [BC3D_Lon(is:NX)-360d0, BC3D_Lon(1:is-1)]))
-            call check_err(nf90_put_var(ncid, lonc_id,                &
+            if (OutType.gt.0) &
+               call check_err(nf90_put_var(ncid, lonc_id,             &
                  [0.5d0*(BC3D_Lon(is:NX-1) + BC3D_Lon(is+1:NX))-360d0,&
                   0.5d0*(BC3D_Lon(NX)-360d0 + BC3D_Lon(1)),           &
                   0.5d0*(BC3D_Lon(1:is-1)  + BC3D_Lon(2:is))]))
          endif
          call check_err(nf90_put_var(ncid, lat_id, BC3D_Lat))
-         call check_err(nf90_put_var(ncid, latc_id, &
+         if (OutType.gt.0) &
+            call check_err(nf90_put_var(ncid, latc_id, &
               0.5d0*(BC3D_Lat(1:NY-1) + BC3D_Lat(2:NY))))
-         call check_err(nf90_put_var(ncid, lats_id, BC3D_Lat(2:NY-1)))
+         if (OutType.eq.2) &
+            call check_err(nf90_put_var(ncid, lats_id,BC3D_Lat(2:NY-1)))
          call check_err(nf90_close(ncid))
       endif
       ! Barrier to ensure wait until netcdf is created by first
@@ -967,12 +981,14 @@
             if (DT%total_seconds() <= 0) exit
          enddo
          if (myProc.eq.0) write(6,*) 'tsind = ',tsind
-         call check_err(nf90_inq_varid(ncid,'BPGX', BPGX_id))
-         call check_err(nf90_inq_varid(ncid,'BPGY', BPGY_id))
+         if (OutType.gt.0) then
+            call check_err(nf90_inq_varid(ncid,'BPGX', BPGX_id))
+            call check_err(nf90_inq_varid(ncid,'BPGY', BPGY_id))
+            call check_err(nf90_inq_varid(ncid,'SigTS', SigTS_id))
+            call check_err(nf90_inq_varid(ncid,'MLD', MLD_id))
+         endif
          call check_err(nf90_inq_varid(ncid,'NB', NB_id))    
          call check_err(nf90_inq_varid(ncid,'NM', NM_id))
-         call check_err(nf90_inq_varid(ncid,'SigTS', SigTS_id))
-         call check_err(nf90_inq_varid(ncid,'MLD', MLD_id))
          if (OutType.eq.2) then
             call check_err(nf90_inq_varid(ncid,'KE', KE_id))
             call check_err(nf90_inq_varid(ncid,'CDisp', CD_id))
@@ -1048,12 +1064,14 @@
          call check_err(nf90_put_var(ncid, timenc_id,    &
                         CurDT%strftime("%Y-%m-%d %H:%M"),&
                         [1, start(3)],[16, kount(3)]))
-         call put_var(ncid, BPGX_id,BC2D_BX, start, kount)
-         call put_var(ncid, BPGY_id, BC2D_BY, start, kountY)
+         if (OutType.gt.0) then
+            call put_var(ncid, BPGX_id,BC2D_BX, start, kount)
+            call put_var(ncid, BPGY_id, BC2D_BY, start, kountY)
+            call put_var(ncid, SigTS_id, BC2D_SigTS, start, kount)
+            call put_var(ncid, MLD_id, BC2D_MLD, start, kount)
+         endif
          call put_var(ncid, NB_id, BC2D_NB, start, kount)
          call put_var(ncid, NM_id, BC2D_NM, start, kount)
-         call put_var(ncid, SigTS_id, BC2D_SigTS, start, kount)
-         call put_var(ncid, MLD_id, BC2D_MLD, start, kount)
          if (OutType.eq.2) then
             call put_var(ncid, KE_id, BC2D_KE, start, kount)
             call put_var(ncid, CD_id, BC2D_CD, start, kountYY)

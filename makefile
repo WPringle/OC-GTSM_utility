@@ -1,11 +1,14 @@
+SHELL:=/bin/bash
+
 FC = mpif90
-O_DIR = #odir1/ 
-GSWHOME       := ../lib/GSW-Fortran-master/
-DATETIMEHOME  := ../lib/datetime-fortran-master/build/
-HDF5HOME=/opt/crc/h/hdf5/intel/17.1/build/lib/ 
-NETCDFHOME=/afs/crc.nd.edu/x86_64_linux/n/netcdf/4.4.1/intel-17.1/build/
-incdir = -I$(DATETIMEHOME)include -I$(NETCDFHOME)include -I$(GSWHOME)modules
-libdir = -L$(NETCDFHOME)/lib -L$(HDF5HOME) -L$(GSWHOME) -L$(DATETIMEHOME)lib/
+O_DIR =  
+LIBHOME    = $(PWD)/libs/
+HDF5HOME   = /afs/crc.nd.edu/x86_64_linux/hdf/hdf5-1.8.6-linux-x86_64-static/lib
+NETCDFHOME = /afs/crc.nd.edu/x86_64_linux/n/netcdf/4.7.0/intel/18.0/
+GSWHOME       := $(LIBHOME)GSW-Fortran/build/
+DATETIMEHOME  := $(LIBHOME)datetime-fortran/build/
+incdir = -I$(DATETIMEHOME)include -I$(NETCDFHOME)include -I$(GSWHOME)gsw/
+libdir = -L$(NETCDFHOME)lib -L$(HDF5HOME) -L$(GSWHOME) -L$(DATETIMEHOME)lib/
 FFLAGS = -O2 -c $(incdir) -traceback #-g -check bounds 
 LFLAGS = -O2 $(libdir) -lnetcdf -lnetcdff -lgsw -ldatetime
 LINK = $(FC)
