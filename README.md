@@ -24,6 +24,7 @@ git clone https://github.com/wavebitscientific/datetime-fortran.git</br>
 cd datetime-fortran</br>
 -> follow cmake compilation instructions on datetime-fortran README (Make sure -DCMAKE_Fortran_COMPILER="compiler" that you will use for OC-GTSM_utility)</br>
 cd ../../</br>
+-> edit paths to NetCDF and HDF home (containing include/ and lib/) directories in makefile</br>
 make</br>
 
 Note: I used MVAPICH2 Intel compiler,and set the -DCMAKE_Fortran_COMPILER=ifort, i.e., use:</br>
