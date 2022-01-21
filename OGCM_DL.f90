@@ -369,23 +369,24 @@
       yyyy     = TimeOff%strftime("%Y")
 
       ! GLBv0.08: GOFS 3.1 on lat lon structured grid
+	  ! CPB 1/21/2022: changed to updated GOFS 3.1 grid (GLBy0.08)
       ! Get servername
       if (BCServer == 'ftp') then
          ! FTP
-         fileserver = '"ftp://ftp.hycom.org/datasets/GLBv0.08/'
+         fileserver = '"ftp://ftp.hycom.org/datasets/GLBy0.08/'
          !fileserver = '"http://tds.hycom.org/thredds/fileServer/'&
          !           //'datasets/GLBv0.08/'
          command    = 'curl ' !'wget '
          options    = ' -s --connect-timeout 30'
       elseif (BCServer == 'ncs') then
          ! NCSS
-         fileserver = '"http://ncss.hycom.org/thredds/ncss/GLBv0.08/'
+         fileserver = '"http://ncss.hycom.org/thredds/ncss/GLBy0.08/'
          command    = 'curl '
          options    = ' -s --connect-timeout 30'
       elseif (BCServer == 'opd') then
          ! OpenDap
          command    = 'ncks '
-         fileserver = '"http://tds.hycom.org/thredds/dodsC/GLBv0.08/'
+         fileserver = '"http://tds.hycom.org/thredds/dodsC/GLBy0.08/'
          options    = ' -4 -O '
       endif
       if (TimeOff%getYear().ge.2018) then
@@ -860,7 +861,10 @@
          call check_err(nf90_def_dim(ncid,'NY',NY,NY_dim_id))
          if (OutType.gt.0) &
            call check_err(nf90_def_dim(ncid,'NYY',NY-1,NYY_dim_id))
-         if (OutType.eq.2) &
+		 ! CPB 01/21/2022: changed condition to always define NYYY_dim_id because of netcdf error
+		 ! This should not be an issue since it just results in the latitude for Disp to be written
+		 ! even if it is not used in the adcirc run
+         if (OutType.gt.0) &
            call check_err(nf90_def_dim(ncid,'NYYY',NY-2,NYYY_dim_id))
          ! Define vars 
          data_dims = [strlen_dim_id, timenc_dim_id, 1]
